@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}Write & Export — AI Handwriter{% endblock %}
+{% block content %}
+<div class="layout">
+
+  <section class="panel">
+    <h1>Write &amp; Export</h1>
+    <p class="sub">Turn your words into handwriting. Set the feel, preview every page, then make it yours.</p>
+
+    <form id="writeForm">
+      <label class="block-label" for="text">Text</label>
+      <textarea id="text" name="text" rows="12" maxlength="20000" required placeholder="Type or paste text here — blank lines start a new paragraph.">{{ form.text }}</textarea>
+
+      <div class="field-grid">
+        <div>
+          <label for="profile">Handwriting profile</label>
+          <select id="profile" name="profile">
+            {% for p in profiles %}
+              <option value="{{ p }}" {{ 'selected' if p == form.profile else '' }}>{{ p }}</option>
+            {% endfor %}
+          </select>
+          <p class="hint">Trained profiles appear here after you create one on the <a href="{{ url_for('train_page') }}">Personalize</a> page.</p>
+        </div>
+        <div>
+          <label for="bias">Neatness (bias)</label>
+          <input type="range" id="bias" name="bias" min="0" max="3" step="0.1" value="{{ form.bias }}"
+                 oninput="document.getElementById('biasval').textContent=this.value">
+          <p class="hint">More expressive <span id="biasval">{{ form.bias }}</span> Neater</p>
+        </div>
+        <div>
+          <label for="seed">Random seed</label>
+          <input type="number" id="seed" name="seed" value="{{ form.seed }}">
+          <p class="hint">Same seed + text = same handwriting every time.</p>
+        </div>
+      </div>
+
+      <details id="modelSetup">
+        <summary>Fine-tune the feel</summary>
+        <p class="hint">Shorter chunks help attention stay on track. More retries or steps take longer.</p>
+        <div class="field-grid">
+          <div><label for="chunk_chars">Chunk length (characters)</label><input id="chunk_chars" name="chunk_chars" type="number" min="12" max="48" value="{{ form.chunk_chars }}"></div>
+          <div><label for="attempts">Maximum attempts</label><input id="attempts" name="attempts" type="number" min="1" max="5" value="{{ form.attempts }}"></div>
+          <div><label for="steps_per_char">Steps per character</label><input id="steps_per_char" name="steps_per_char" type="number" min="20" max="100" value="{{ form.steps_per_char }}"></div>
+          <div><label for="letter_spacing">Letter width</label><input id="letter_spacing" name="letter_spacing" type="number" min="0.5" max="1.5" step="0.05" value="{{ form.letter_spacing }}"></div>
+          <div><label for="word_spacing">Chunk gap</label><input id="word_spacing" name="word_spacing" type="number" min="0.5" max="2" step="0.1" value="{{ form.word_spacing }}"></div>
+          <div><label for="slant">Slant (degrees)</label><input id="slant" name="slant" type="number" min="-20" max="20" value="{{ form.slant }}"></div>
+        </div>
+      </details>
+
+      <details id="pageSetup">
+        <summary>Page setup</summary>
+        <div class="field-grid">
+          <div><label>Page width (mm)</label><input type="number" step="0.1" name="page_width_mm" value="{{ form.page_width_mm }}"></div>
+          <div><label>Page height (mm)</label><input type="number" step="0.1" name="page_height_mm" value="{{ form.page_height_mm }}"></div>
+          <div><label>Margin left (mm)</label><input type="number" step="0.1" name="margin_left_mm" value="{{ form.margin_left_mm }}"></div>
+          <div><label>Margin right (mm)</label><input type="number" step="0.1" name="margin_right_mm" value="{{ form.margin_right_mm }}"></div>
+          <div><label>Margin top (mm)</label><input type="number" step="0.1" name="margin_top_mm" value="{{ form.margin_top_mm }}"></div>
+          <div><label>Margin bottom (mm)</label><input type="number" step="0.1" name="margin_bottom_mm" value="{{ form.margin_bottom_mm }}"></div>
+          <div><label>Line spacing (mm)</label><input type="number" step="0.1" name="line_spacing_mm" value="{{ form.line_spacing_mm }}"></div>
+          <div><label>Paragraph spacing (mm)</label><input type="number" step="0.1" name="paragraph_spacing_mm" value="{{ form.paragraph_spacing_mm }}"></div>
+          <div><label>Handwriting size (mm)</label><input type="number" step="0.1" name="handwriting_size_mm" value="{{ form.handwriting_size_mm }}"></div>
+          <div class="checkbox-row"><label><input type="checkbox" name="lined" {{ 'checked' if form.lined == 'on' else '' }}> Ruled/lined page</label></div>
+        </div>
+      </details>
+
+      <details id="printerSetup">
+        <summary>Printer &amp; pen calibration</summary>
+        <p class="hint">Not sure about pen offset/Z values yet? Download the
+          <a href="{{ url_for('calibration_pattern', profile='default') }}">calibration pattern G-code</a>,
+          run it, and measure against the printed square.</p>
+        <div class="field-grid">
+          <div><label>Bed width (mm)</label><input type="number" step="0.1" name="bed_width_mm" value="{{ form.bed_width_mm }}"></div>
+          <div><label>Bed height (mm)</label><input type="number" step="0.1" name="bed_height_mm" value="{{ form.bed_height_mm }}"></div>
+          <div><label>Paper origin X (mm)</label><input type="number" step="0.1" name="paper_origin_x_mm" value="{{ form.paper_origin_x_mm }}"></div>
+          <div><label>Paper origin Y (mm)</label><input type="number" step="0.1" name="paper_origin_y_mm" value="{{ form.paper_origin_y_mm }}"></div>
+          <div><label>Pen-up Z (mm)</label><input type="number" step="0.1" name="pen_up_z_mm" value="{{ form.pen_up_z_mm }}"></div>
+          <div><label>Pen-down Z (mm)</label><input type="number" step="0.1" name="pen_down_z_mm" value="{{ form.pen_down_z_mm }}"></div>
+          <div><label>Writing speed (mm/s)</label><input type="number" step="0.1" name="writing_speed_mm_s" value="{{ form.writing_speed_mm_s }}"></div>
+          <div><label>Travel speed (mm/s)</label><input type="number" step="0.1" name="travel_speed_mm_s" value="{{ form.travel_speed_mm_s }}"></div>
+        </div>
+      </details>
+
+      <div class="submit-row"><button type="submit" class="primary" id="generateBtn">Create handwriting</button><span class="hint">SVG · PNG · G-code</span></div>
+      <div id="generationProgress" class="progress-box" hidden>
+        <p id="generationStatus" role="status" aria-live="polite">Preparing your pages…</p>
+        <progress id="generationBar" max="100" value="0" aria-label="Handwriting generation progress"></progress>
+        <p class="hint">You can keep editing while this document runs.</p>
+      </div>
+      <p id="generationError" class="warn" role="alert" hidden></p>
+    </form>
+  </section>
+
+  <section class="preview-panel" aria-label="Document preview">
+    <div class="preview-heading"><h2>Your pages</h2><span id="pageCount" class="hint">Preview &amp; export</span></div>
+    <div id="previewEmpty" class="empty-sheet">
+      <div class="empty-sheet-copy"><h3>Room for your words.</h3><p>Your handwriting will appear here.<br>Start with a note, a letter, or a whole story.</p></div>
+    </div>
+    <div id="generationResult" hidden></div>
+  </section>
+
+</div>
+<script src="{{ url_for('static', filename='jobs.js') }}"></script>
+<script>
+  // Keep collapsible sections' open/closed state as the user left it across
+  // visits, without making generation reload the page.
+  for (const id of ['pageSetup', 'printerSetup', 'modelSetup']) {
+    const el = document.getElementById(id);
+    if (localStorage.getItem(id + '_open') === '1') el.open = true;
+    el.addEventListener('toggle', () => localStorage.setItem(id + '_open', el.open ? '1' : '0'));
+  }
+  // Associate existing numeric labels without changing their calibration fields.
+  for (const input of document.querySelectorAll('.field-grid input[name]')) {
+    if (!input.id) input.id = input.name;
+    const label = input.parentElement.querySelector('label');
+    if (label && input.type !== 'checkbox') label.htmlFor = input.id;
+  }
+  const form = document.getElementById('writeForm');
+  const button = document.getElementById('generateBtn');
+  const error = document.getElementById('generationError');
+  function showResult(result) {
+    const target = document.getElementById('generationResult');
+    target.replaceChildren();
+    document.getElementById('previewEmpty').hidden = true;
+    target.hidden = false;
+    document.getElementById('pageCount').textContent = `${result.num_pages} page${result.num_pages === 1 ? '' : 's'} · ${result.gen_seconds}s`;
+    const links = document.createElement('div'); links.className = 'downloads';
+    function download(url, label, primary = false) {
+      const a = document.createElement('a'); a.href = url; a.textContent = label; a.download = '';
+      if (primary) a.className = 'primary';
+      links.append(a);
+    }
+    if (result.gcode_url) download(result.gcode_url, 'Download G-code', true);
+    else { const p = document.createElement('p'); p.className = 'warn'; p.textContent = `G-code blocked: ${result.gcode_error}`; target.append(p); }
+    target.append(links);
+    for (const warning of result.warnings || []) {
+      const p = document.createElement('p'); p.className = 'warn'; p.textContent = warning; target.append(p);
+      const text = document.createElement('pre'); text.className = 'normalized-text'; text.textContent = result.normalized_text; target.append(text);
+    }
+    if (result.margin_warnings) {
+      const p = document.createElement('p'); p.className = 'warn'; p.textContent = `${result.margin_warnings} points extend past the margins. Inspect the preview before plotting.`; target.append(p);
+    }
+    result.preview_urls.forEach((url, i) => {
+      const page = document.createElement('div'); page.className = 'page-preview';
+      const label = document.createElement('div'); label.className = 'page-label'; label.textContent = `Page ${i + 1}`;
+      const image = document.createElement('img'); image.src = url; image.alt = `Generated handwriting, page ${i + 1}`; image.loading = 'lazy';
+      page.append(label, image); target.append(page);
+      download(result.svg_urls[i], `SVG · page ${i + 1}`);
+      download(result.png_urls[i], `PNG · page ${i + 1}`);
+    });
+  }
+  function progress(job) {
+    document.getElementById('generationProgress').hidden = false;
+    document.getElementById('generationBar').value = job.progress;
+    document.getElementById('generationStatus').textContent = job.status === 'generating'
+      ? `Writing line ${job.completed} of ${job.total} · about ${job.eta_s}s remaining`
+      : job.status === 'rendering' ? 'Preparing previews and downloads…' : 'Preparing your pages…';
+  }
+  async function resume(id) {
+    button.disabled = true; error.hidden = true;
+    try { showResult(await HandwriterJobs.wait(id, progress)); }
+    catch (e) {
+      error.textContent = e.message; error.hidden = false;
+      if (!e.message.startsWith('Connection lost')) sessionStorage.removeItem('generationJob');
+      return;
+    }
+    finally { button.disabled = false; document.getElementById('generationProgress').hidden = true; }
+    sessionStorage.removeItem('generationJob');
+  }
+  form.addEventListener('submit', async event => {
+    event.preventDefault(); button.disabled = true; error.hidden = true;
+    try {
+      const id = await HandwriterJobs.start('/generate', new FormData(form));
+      sessionStorage.setItem('generationJob', id); await resume(id);
+    } catch (e) { error.textContent = e.message; error.hidden = false; button.disabled = false; }
+  });
+  if (sessionStorage.getItem('generationJob')) resume(sessionStorage.getItem('generationJob'));
+</script>
+{% endblock %}

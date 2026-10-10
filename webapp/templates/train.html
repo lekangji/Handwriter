@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Personalize — AI Handwriter{% endblock %}
+{% block content %}
+<div class="layout">
+
+  <section class="panel">
+    <h1>Personalize</h1>
+    <p class="sub">Teach the model how you write. Capture a few phrases, build a profile, and keep it for every new document.</p>
+
+    <ol class="steps">
+      <li>
+        <strong>Capture samples.</strong> Open the <a href="{{ url_for('capture_tool') }}" target="_blank" rel="noopener">sample capture tool</a>
+        (works with a mouse, but a stylus/tablet gives much better results). It starts with a one-time calibration
+        stroke, then walks you through prompts — use its own text box to add your own phrases, especially
+        punctuation the base model is weakest at. Click <em>Download JSON</em> when done.
+      </li>
+      <li><strong>Upload it below</strong> and choose a name for this profile.</li>
+      <li><strong>Use it</strong> on the <a href="{{ url_for('write_page') }}">Write &amp; Export</a> page's profile dropdown once training finishes.</li>
+    </ol>
+
+    <p class="hint">Older sample files are converted automatically for training. Files without calibration use an estimated writing scale.</p>
+
+    <form id="trainForm">
+      <label class="block-label" for="samples_json">Samples JSON (from the capture tool)</label>
+      <input type="file" id="samples_json" name="samples_json" accept=".json" required>
+      <p class="hint" id="fileCheckStatus"></p>
+
+      <div class="field-grid">
+        <div>
+          <label for="profile_name">Profile name</label>
+          <input type="text" id="profile_name" name="profile_name" required maxlength="64" pattern="[A-Za-z0-9_-]+" value="my_handwriting" placeholder="e.g. my_handwriting">
+        </div>
+        <div>
+          <label for="base_profile">Start from</label>
+          <select id="base_profile" name="base_profile">
+            {% for p in profiles %}<option value="{{ p }}" {{ 'selected' if p == 'default' else '' }}>{{ p }}</option>{% endfor %}
+          </select>
+          <p class="hint">Start with default when rebuilding a profile made before the capture fixes.</p>
+        </div>
+        <div>
+          <label for="epochs">Epochs</label>
+          <input type="number" id="epochs" name="epochs" value="10" min="1" max="40">
+          <p class="hint">More epochs = closer fit to your samples, but slower and more prone to overfitting on small datasets.</p>
+        </div>
+        <div>
+          <label for="learning_rate">Learning rate</label>
+          <input id="learning_rate" name="learning_rate" type="number" min="0.000001" max="0.001" step="0.000001" value="0.00001" required>
+          <p class="hint">Start small to preserve readable letters. Large values can erase what the model knows.</p>
+        </div>
+      </div>
+
+      <p class="hint">Runs in the background. Web training is capped to keep the workload reasonable
+        (samples &times; epochs &le; 800). For a bigger dataset, run <code>python -m ai.training.finetune_cli</code> from the command line
+        instead — see README.md — which has no such limit.</p>
+
+      <button type="submit" class="primary" id="submitBtn">Start fine-tuning</button>
+    </form>
+
+  </section>
+
+  <section class="panel">
+    <h2>Result</h2>
+    <div id="progressBox" style="display:none">
+      <p id="progressText" role="status" aria-live="polite">Starting…</p>
+      <progress id="progressBar" aria-label="Training progress" max="100" value="0"></progress>
+    </div>
+    <div id="resultEmpty" class="empty-state">Training log and the resulting profile will appear here.</div>
+    <div id="resultCard" class="result-card" style="display:none">
+      <p><strong>Profile saved:</strong> <span id="rProfileName"></span></p>
+      <table class="kv">
+        <tr><td>Samples used</td><td id="rSamples"></td></tr>
+        <tr><td>Epochs</td><td id="rEpochs"></td></tr>
+        <tr><td>Training time</td><td id="rTime"></td></tr>
+        <tr><td>Loss (start → end)</td><td id="rLoss"></td></tr>
+        <tr><td>Alphabet size</td><td id="rAlphaSize"></td></tr>
+        <tr id="rNewCharsRow" style="display:none"><td>New characters added</td><td id="rNewChars"></td></tr>
+      </table>
+      <p class="hint">Loss should go down. If it's not moving, or moved a lot in only a few epochs, you likely need
+        more samples for a stable fine-tune — a small dataset can overfit fast either way.</p>
+      <a class="primary" href="{{ url_for('write_page') }}">Go write something with it →</a>
+    </div>
+    <div id="resultError" role="alert" class="warn" style="display:none"></div>
+  </section>
+
+</div>
+
+<script src="{{ url_for('static', filename='jobs.js') }}"></script>
+<script>
+let alphabetCheck = 0;
+// Check against the selected source profile, including its trained characters.
+async function checkSamples() {
+  const file = document.getElementById('samples_json').files[0];
+  const status = document.getElementById('fileCheckStatus');
+  const sequence = ++alphabetCheck;
+  if (!file) { status.textContent = ''; return; }
+  status.textContent = 'Checking your samples…';
+  try {
+    const body = new FormData();
+    body.append('samples_json', file);
+    body.append('base_profile', document.getElementById('base_profile').value);
+    const response = await fetch('/train/check-alphabet', {method: 'POST', body});
+    const data = await response.json();
+    if (sequence !== alphabetCheck) return;
+    if (!response.ok) throw new Error(data.error || 'Could not check this file.');
+    status.className = 'hint';
+    status.textContent = `${data.num_samples} samples ready for training.`;
+  } catch (error) {
+    if (sequence !== alphabetCheck) return;
+    status.className = 'warn'; status.textContent = error.message;
+  }
+}
+document.getElementById('samples_json').addEventListener('change', checkSamples);
+
+const trainForm = document.getElementById('trainForm');
+const submitBtn = document.getElementById('submitBtn');
+const progressBox = document.getElementById('progressBox');
+const progressText = document.getElementById('progressText');
+const progressBar = document.getElementById('progressBar');
+const resultError = document.getElementById('resultError');
+function showLog(log) {
+  document.getElementById('rProfileName').textContent = log.profile_name;
+  document.getElementById('rSamples').textContent = log.num_samples;
+  document.getElementById('rEpochs').textContent = log.epochs;
+  document.getElementById('rTime').textContent = log.train_seconds + 's';
+  document.getElementById('rLoss').textContent = `${log.loss_start} → ${log.loss_end}`;
+  document.getElementById('rAlphaSize').textContent = log.alphabet_size;
+  document.getElementById('rNewCharsRow').style.display = log.new_chars.length ? '' : 'none';
+  document.getElementById('rNewChars').textContent = log.new_chars.join(' ');
+  document.getElementById('resultCard').style.display = 'block';
+}
+async function resumeTraining(id) {
+  submitBtn.disabled = true;
+  resultError.style.display = 'none';
+  document.getElementById('resultCard').style.display = 'none';
+  document.getElementById('resultEmpty').style.display = 'none';
+  progressBox.style.display = 'block';
+  try {
+    const log = await HandwriterJobs.wait(id, job => {
+      progressBar.value = job.progress;
+      progressText.textContent = job.status === 'training'
+        ? `Epoch ${job.epoch}/${job.epochs} · loss ${job.loss} · about ${job.eta_s}s remaining`
+        : 'Preparing your handwriting profile…';
+    });
+    showLog(log);
+    sessionStorage.removeItem('trainingJob');
+  } catch (error) {
+    resultError.textContent = error.message; resultError.style.display = 'block';
+    if (!error.message.startsWith('Connection lost')) sessionStorage.removeItem('trainingJob');
+  } finally {
+    submitBtn.disabled = false; progressBox.style.display = 'none';
+  }
+}
+trainForm.addEventListener('submit', async event => {
+  event.preventDefault(); submitBtn.disabled = true; resultError.style.display = 'none';
+  try {
+    const id = await HandwriterJobs.start('/train/run', new FormData(trainForm));
+    sessionStorage.setItem('trainingJob', id); await resumeTraining(id);
+  } catch (error) {
+    resultError.textContent = error.message; resultError.style.display = 'block'; submitBtn.disabled = false;
+  }
+});
+if (sessionStorage.getItem('trainingJob')) resumeTraining(sessionStorage.getItem('trainingJob'));
+// The source profile may have a larger alphabet than the default model.
+document.getElementById('base_profile').addEventListener('change', checkSamples);
+</script>
+{% endblock %}

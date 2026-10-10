@@ -1,0 +1,6 @@
+numpy
+matplotlib
+scipy
+svgwrite
+tensorflow
+flask

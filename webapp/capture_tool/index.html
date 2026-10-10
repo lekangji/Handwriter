@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>AI Handwriter — Sample Capture</title>
+        <link rel="stylesheet" href="../static/style.css" />
+        <style>
+            body {
+                font-family: system-ui, sans-serif;
+                margin: 0;
+                color: #342b25;
+                background: #f6f0e7;
+                line-height: 1.6;
+            }
+            main { max-width: 850px; margin: auto; padding: 40px 20px; }
+            * { box-sizing: border-box; }
+            h1 { font-family: Georgia, serif; font-weight: 500; font-size: clamp(2rem, 5vw, 3rem); line-height: 1.15; }
+            a { color: #9b4b32; text-underline-offset: 4px; }
+            :focus-visible { outline: 3px solid #9b4b32; outline-offset: 3px; }
+            ::selection { background: #eac9b8; color: #342b25; }
+            #prompt {
+                font-size: 22px;
+                margin-bottom: 10px;
+            }
+            #prompt b {
+                color: #9b4b32;
+            }
+            canvas {
+                border: 1px solid #b9a795;
+                border-radius: 12px;
+                touch-action: none;
+                background: #fffdf8;
+                cursor: crosshair;
+                display: block;
+                max-width: 100%;
+                height: auto;
+            }
+            #canvas { width: 100%; max-width: 650px; }
+            .row {
+                margin: 16px 0;
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 8px;
+            }
+            button {
+                font-size: 15px;
+                padding: 8px 16px;
+                min-height: 44px;
+                border: 1px solid #b9a795;
+                border-radius: 8px;
+                background: #fffdf8;
+                color: #342b25;
+                cursor: pointer;
+            }
+            button:hover { background: #e9dfd2; }
+            .row > button { margin: 0; min-height: 46px; padding: 10px 16px; }
+            button.primary { background: #9b4b32; border-color: #9b4b32; color: #fffdf8; }
+            button.primary:hover { background: #7e3924; }
+            button:disabled { cursor: default; opacity: .5; }
+            #sampleStatus { min-height: 1.6em; }
+            button.small {
+                font-size: 12px;
+                padding: 3px 8px;
+                margin-right: 4px;
+            }
+            #count {
+                color: #746357;
+            }
+            textarea {
+                width: 100%;
+                height: 60px;
+                font-size: 15px;
+                box-sizing: border-box;
+                min-height: 80px;
+                padding: 10px;
+                border: 1px solid #b9a795;
+                border-radius: 8px;
+                color: #342b25;
+                background: #fffdf8;
+                caret-color: #9b4b32;
+            }
+            textarea::placeholder { color: #746357; }
+            .hint {
+                color: #746357;
+                font-size: 13px;
+            }
+            .warn {
+                color: #9b4b32;
+                font-size: 13px;
+            }
+            #queueList {
+                max-height: 180px;
+                overflow-y: auto;
+                border: 1px solid #b9a795;
+                border-radius: 6px;
+                padding: 4px;
+                margin-top: 6px;
+            }
+            #queueList div {
+                display: flex;
+                align-items: center;
+                padding: 3px 4px;
+                border-bottom: 1px solid #f0f0f0;
+                font-size: 13px;
+            }
+            #queueList div.current {
+                background: #ead9c9;
+                font-weight: 600;
+            }
+            #queueList .txt {
+                flex: 1;
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            #calibrationScreen {
+                display: none;
+            }
+            #captureScreen {
+                display: none;
+            }
+            .step-box {
+                border: 0;
+                border-top: 1px solid #cbbcaa;
+                border-radius: 0;
+                padding: 24px 0;
+                margin: 24px 0;
+                background: transparent;
+            }
+            .field-row {
+                margin: 8px 0;
+            }
+            .field-row label {
+                display: inline-block;
+                min-width: 190px;
+            }
+        </style>
+    </head>
+    <body>
+        <header class="topbar">
+            <div class="topbar-inner">
+                <a class="brand" href="/">AI Handwriter</a>
+                <nav aria-label="Main navigation">
+                    <a href="/">Write &amp; Export</a>
+                    <a href="/train">Personalize</a>
+                    <a href="/profiles">Profiles</a>
+                    <a href="/capture-tool" class="active" aria-current="page">Capture samples</a>
+                </nav>
+            </div>
+        </header>
+        <main>
+        <h1>Capture samples</h1>
+        <p class="hint">Capture clear phrases. Use a stylus when possible. Saved samples stay in this browser until you download them.</p>
+
+        <!-- ===================== STEP 1: CALIBRATION ===================== -->
+        <div id="calibrationScreen">
+            <div class="step-box">
+                <p>
+                    <strong>First, set your writing size.</strong> Write a tall cursive <b>f</b>,
+                    reaching both guide lines. This sets one scale for all your samples.
+                    Keep that letter height as you write the phrases below.
+                </p>
+                <canvas id="calCanvas" width="300" height="160"></canvas>
+                <div class="row">
+                    <button onclick="clearCalibration()">Clear</button>
+                    <button class="primary" onclick="confirmCalibration()">Use this &amp; continue</button>
+                </div>
+                <p class="hint" id="calStatus">
+                    Write one tall letter filling the guide band, then click "Use this &amp;
+                    continue".
+                </p>
+            </div>
+        </div>
+
+        <!-- ===================== STEP 2: CAPTURE ===================== -->
+        <div id="captureScreen">
+            <p>
+                Write the word/phrase shown below in your normal handwriting (mouse, trackpad, or —
+                much better — a stylus/tablet). You don't need to start exactly at the left edge, or
+                sit precisely on the guide line — only the shape and relative motion of your writing
+                matters, not where on the canvas you start. Try to keep letter
+                <em>height</em> consistent with your calibration stroke, though, since that's what
+                keeps the model's sense of scale correct.
+            </p>
+
+            <div id="prompt">Write: <b id="promptText">loading...</b></div>
+            <canvas id="canvas" width="650" height="150"></canvas>
+            <div class="row">
+                <button class="primary" id="saveButton" onclick="saveSample()">Save &amp; next</button>
+                <button onclick="undoStroke()">Undo stroke</button>
+                <button onclick="clearCanvas()">Clear</button>
+                <button onclick="nextPrompt()">Skip</button>
+                <button id="downloadButton" onclick="downloadJSON()" disabled>
+                    Download JSON (<span id="count">0</span> samples)
+                </button>
+            </div>
+            <p class="hint" id="sampleStatus" role="status" aria-live="polite"></p>
+
+            <div class="row step-box">
+                <label
+                    ><strong>Prompt queue</strong> (<span id="queueCount">0</span> remaining) — add,
+                    remove, or reorder freely.</label
+                >
+                <div class="field-row">
+                    <textarea aria-label="New prompts, one phrase per line"
+                        id="customPrompts"
+                        placeholder="e.g. Hello, world! (a test) - see note #1&#10;One phrase per line."
+                    ></textarea>
+                    <button onclick="addCustomPrompts()">Add to queue</button>
+                    <button onclick="clearBuiltins()" class="small">
+                        Remove built-in defaults
+                    </button>
+                </div>
+                <div id="queueList"></div>
+            </div>
+
+            <div class="row step-box">
+                <label
+                    for="mergeFile"><strong>Continue a previous session</strong> — upload a JSON file you exported
+                    earlier; its samples are added to this session's queue before you download
+                    again.</label
+                >
+                <input
+                    type="file"
+                    id="mergeFile"
+                    accept=".json"
+                    onchange="mergePreviousFile(event)"
+                />
+                <p class="hint" id="mergeStatus" role="status"></p>
+            </div>
+        </div>
+
+        </main>
+        <script>
+            // Must match hw_model.py's ALPHABET and layout.py's REFERENCE_MODEL_UNIT_HEIGHT —
+            // this is the "typical ascender-to-descender span" in the pretrained model's own
+            // native unit space. Calibrating against it here is what lets finetune.py convert
+            // captured pixels into the same coordinate scale the pretrained weights expect,
+            // instead of guessing a scale per sample.
+            const REFERENCE_MODEL_UNIT_HEIGHT = 25.0;
+
+            // Fixed spatial spacing preserves shape without adding hundreds of stationary
+            // points when a writer pauses. Half a model unit is a capture approximation.
+            const RESAMPLE_MODEL_UNITS = 0.5;
+
+            const DEFAULT_PROMPTS = [
+                "the quick brown fox",
+                "jumps over the lazy dog",
+                "Hello, world!",
+                "Dear team, (please read)",
+                "See note #1 - urgent.",
+                "cost: 42.50 (approx)",
+                "meeting at 3pm - bring notes",
+                "TODO: fix this and that",
+                "well, I don't know...",
+                "yes/no; maybe?",
+                "A, B, C, D, E",
+                'quotes "like this"',
+                "one two three four",
+                "xavier quincy zoe",
+                "parentheses (like this one)",
+                "dash - dash - dash",
+            ];
+
+            let queue = [...DEFAULT_PROMPTS];
+            let idx = 0;
+            let strokes = []; // list of stroke arrays for current sample: {x,y,t}
+            let currentStroke = null;
+            let samples = []; // {text, strokes: [[{x,y,t},...], ...]}
+            let pxPerModelUnit = null;
+            const DRAFT_KEY = "aihandwriter.capture.v2";
+
+            function saveDraft() {
+                try {
+                    localStorage.setItem(DRAFT_KEY, JSON.stringify({ queue, idx, samples, pxPerModelUnit }));
+                } catch (_) {
+                    document.getElementById("sampleStatus").textContent = "Browser storage unavailable. Download your samples before leaving.";
+                }
+                updateButtons();
+            }
+            function updateButtons() {
+                document.getElementById("downloadButton").disabled = !samples.length;
+                document.getElementById("saveButton").disabled = !queue.length;
+                document.getElementById("count").textContent = samples.length;
+            }
+
+            // ---------- calibration ----------
+            const calCanvas = document.getElementById("calCanvas");
+            const calCtx = calCanvas.getContext("2d");
+            let calStrokes = [];
+            let calCurrent = null;
+            const CAL_TOP = 20,
+                CAL_BOTTOM = 140;
+
+            function drawCalGuides() {
+                calCtx.strokeStyle = "#cbbcaa";
+                calCtx.lineWidth = 1;
+                calCtx.beginPath();
+                calCtx.moveTo(10, CAL_TOP);
+                calCtx.lineTo(290, CAL_TOP);
+                calCtx.stroke();
+                calCtx.beginPath();
+                calCtx.moveTo(10, CAL_BOTTOM);
+                calCtx.lineTo(290, CAL_BOTTOM);
+                calCtx.stroke();
+                calCtx.strokeStyle = "#342b25";
+                calCtx.lineWidth = 2;
+            }
+            function calPointerPos(e) {
+                const r = calCanvas.getBoundingClientRect();
+                let x = (e.clientX - r.left) * (calCanvas.width / r.width);
+                let y = (e.clientY - r.top) * (calCanvas.height / r.height);
+                x = Math.max(0, Math.min(calCanvas.width, x));
+                y = Math.max(0, Math.min(calCanvas.height, y));
+                return { x, y };
+            }
+            let calPointerId = null;
+            calCanvas.addEventListener("pointerdown", (e) => {
+                if (calCurrent || !e.isPrimary || e.button !== 0) return;
+                e.preventDefault();
+                calPointerId = e.pointerId;
+                calCanvas.setPointerCapture(e.pointerId);
+                const p = calPointerPos(e);
+                calCurrent = [p];
+                calStrokes.push(calCurrent);
+                calCtx.beginPath();
+                calCtx.moveTo(p.x, p.y);
+            });
+            calCanvas.addEventListener("pointermove", (e) => {
+                if (!calCurrent || e.pointerId !== calPointerId) return;
+                const p = calPointerPos(e);
+                calCurrent.push(p);
+                calCtx.lineTo(p.x, p.y);
+                calCtx.stroke();
+            });
+            function calEndStroke(e) {
+                if (e && e.pointerId !== calPointerId) return;
+                calCurrent = null;
+                calPointerId = null;
+            }
+            calCanvas.addEventListener("pointerup", calEndStroke);
+            calCanvas.addEventListener("pointercancel", calEndStroke);
+            calCanvas.addEventListener("lostpointercapture", calEndStroke);
+
+            function clearCalibration() {
+                calCtx.clearRect(0, 0, calCanvas.width, calCanvas.height);
+                drawCalGuides();
+                calStrokes = [];
+                calCurrent = null;
+                document.getElementById("calStatus").textContent =
+                    'Write one tall letter filling the guide band, then click "Use this & continue".';
+                document.getElementById("calStatus").className = "hint";
+            }
+            function confirmCalibration() {
+                const pts = calStrokes.flat();
+                if (pts.length < 2) {
+                    document.getElementById("calStatus").textContent =
+                        "Write something first — a tall letter spanning the guide band.";
+                    document.getElementById("calStatus").className = "warn";
+                    return;
+                }
+                const ys = pts.map((p) => p.y);
+                const heightPx = Math.max(...ys) - Math.min(...ys);
+                if (heightPx < (CAL_BOTTOM - CAL_TOP) * 0.6) {
+                    document.getElementById("calStatus").textContent =
+                        "That looks too short — write a full-height letter (ascender to descender) filling the band.";
+                    document.getElementById("calStatus").className = "warn";
+                    return;
+                }
+                pxPerModelUnit = heightPx * calCanvas.getBoundingClientRect().width / calCanvas.width / REFERENCE_MODEL_UNIT_HEIGHT;
+                document.getElementById("calibrationScreen").style.display = "none";
+                document.getElementById("captureScreen").style.display = "block";
+                renderQueueList();
+                document.getElementById("promptText").textContent = queue[idx] || "(queue empty)";
+                clearCanvas();
+                saveDraft();
+            }
+
+            // ---------- main capture ----------
+            const canvas = document.getElementById("canvas");
+            const ctx = canvas.getContext("2d");
+            ctx.lineWidth = 2;
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
+            const PAD = 6; // drawable-area inset from the canvas edge; points are clamped inside it
+
+            function drawGuideLine() {
+                ctx.strokeStyle = "#cbbcaa";
+                ctx.lineWidth = 1;
+                ctx.strokeRect(PAD, PAD, canvas.width - 2 * PAD, canvas.height - 2 * PAD);
+                ctx.strokeStyle = "#cbbcaa";
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(10, 100);
+                ctx.lineTo(640, 100);
+                ctx.stroke();
+                ctx.strokeStyle = "#342b25";
+                ctx.lineWidth = 2;
+            }
+
+            function clearCanvas() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                drawGuideLine();
+                strokes = [];
+                currentStroke = null;
+            }
+
+            function undoStroke() {
+                if (currentStroke) return;
+                strokes.pop();
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                drawGuideLine();
+                for (const stroke of strokes) {
+                    ctx.beginPath();
+                    stroke.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+                    ctx.stroke();
+                }
+            }
+
+            function renderQueueList() {
+                const el = document.getElementById("queueList");
+                el.innerHTML = "";
+                queue.forEach((p, i) => {
+                    const div = document.createElement("div");
+                    if (i === idx) div.className = "current";
+                    const span = document.createElement("button");
+                    span.className = "txt";
+                    span.textContent = p;
+                    span.onclick = () => {
+                        idx = i;
+                        document.getElementById("promptText").textContent = queue[idx];
+                        clearCanvas();
+                        renderQueueList();
+                    };
+                    span.style.cursor = "pointer";
+                    const up = document.createElement("button");
+                    up.className = "small";
+                    up.textContent = "Up";
+                    up.setAttribute("aria-label", `Move ${p} up`);
+                    up.onclick = () => {
+                        if (i > 0) {
+                            [queue[i - 1], queue[i]] = [queue[i], queue[i - 1]];
+                            if (idx === i) idx--;
+                            else if (idx === i - 1) idx++;
+                            renderQueueList();
+                        }
+                    };
+                    const down = document.createElement("button");
+                    down.className = "small";
+                    down.textContent = "Down";
+                    down.setAttribute("aria-label", `Move ${p} down`);
+                    down.onclick = () => {
+                        if (i < queue.length - 1) {
+                            [queue[i + 1], queue[i]] = [queue[i], queue[i + 1]];
+                            if (idx === i) idx++;
+                            else if (idx === i + 1) idx--;
+                            renderQueueList();
+                        }
+                    };
+                    const rm = document.createElement("button");
+                    rm.className = "small";
+                    rm.textContent = "Remove";
+                    rm.setAttribute("aria-label", `Remove ${p}`);
+                    rm.onclick = () => {
+                        queue.splice(i, 1);
+                        if (i < idx) idx--;
+                        if (idx >= queue.length) idx = Math.max(0, queue.length - 1);
+                        document.getElementById("promptText").textContent =
+                            queue[idx] || "(queue empty — add more below)";
+                        clearCanvas();
+                        renderQueueList();
+                    };
+                    div.append(span, up, down, rm);
+                    el.appendChild(div);
+                });
+                document.getElementById("queueCount").textContent = queue.length;
+                saveDraft();
+            }
+
+            function nextPrompt() {
+                if (queue.length === 0) {
+                    document.getElementById("promptText").textContent =
+                        "(queue empty — add more below)";
+                    clearCanvas();
+                    renderQueueList();
+                    return;
+                }
+                idx = (idx + 1) % queue.length;
+                document.getElementById("promptText").textContent = queue[idx];
+                clearCanvas();
+                renderQueueList();
+            }
+
+            function addCustomPrompts() {
+                const lines = document
+                    .getElementById("customPrompts")
+                    .value.split("\n")
+                    .map((s) => s.trim())
+                    .filter(Boolean);
+                if (lines.length === 0) return;
+                const wasEmpty = queue.length === 0;
+                queue.push(...lines);
+                document.getElementById("customPrompts").value = "";
+                renderQueueList(); // immediate — don't wait for the loop to come back around
+                if (wasEmpty) {
+                    idx = 0;
+                    document.getElementById("promptText").textContent = queue[idx];
+                }
+                saveDraft();
+            }
+
+            function clearBuiltins() {
+                queue = queue.filter((p) => !DEFAULT_PROMPTS.includes(p));
+                if (idx >= queue.length) idx = Math.max(0, queue.length - 1);
+                document.getElementById("promptText").textContent =
+                    queue[idx] || "(queue empty — add more below)";
+                clearCanvas();
+                renderQueueList();
+            }
+
+            function pointerPos(e) {
+                const r = canvas.getBoundingClientRect();
+                let x = (e.clientX - r.left) * (canvas.width / r.width);
+                let y = (e.clientY - r.top) * (canvas.height / r.height);
+                // clamp to the drawable area so a stroke that drifts off-canvas doesn't
+                // record a wild coordinate that would corrupt training data
+                x = Math.max(PAD, Math.min(canvas.width - PAD, x));
+                y = Math.max(PAD, Math.min(canvas.height - PAD, y));
+                return { x, y, t: e.timeStamp };
+            }
+
+            let pointerId = null;
+            canvas.addEventListener("pointerdown", (e) => {
+                if (currentStroke || !e.isPrimary || e.button !== 0) return;
+                e.preventDefault();
+                pointerId = e.pointerId;
+                canvas.setPointerCapture(e.pointerId);
+                const p = pointerPos(e);
+                currentStroke = [p];
+                strokes.push(currentStroke);
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+            });
+            canvas.addEventListener("pointermove", (e) => {
+                if (!currentStroke || e.pointerId !== pointerId) return;
+                const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+                for (const pointEvent of events.length ? events : [e]) {
+                    const p = pointerPos(pointEvent);
+                    currentStroke.push(p);
+                    ctx.lineTo(p.x, p.y);
+                    ctx.stroke();
+                }
+            });
+            function endStroke(e) {
+                if (!currentStroke || e.pointerId !== pointerId) return;
+                if (e.type === "pointerup") {
+                    const p = pointerPos(e);
+                    currentStroke.push(p);
+                    ctx.lineTo(p.x, p.y);
+                    ctx.stroke();
+                }
+                currentStroke = null;
+                pointerId = null;
+            }
+            canvas.addEventListener("pointerup", endStroke);
+            canvas.addEventListener("pointercancel", endStroke);
+            canvas.addEventListener("lostpointercapture", endStroke);
+
+            // Resample by distance in calibrated model units, retaining endpoints and
+            // dots. Browser event frequency and pauses must not change training geometry.
+            function resampleStroke(pts) {
+                if (pts.length < 2) return pts.map((p) => ({ x: p.x, y: p.y }));
+                const out = [{ x: pts[0].x, y: pts[0].y }];
+                const spacing = pxPerModelUnit * RESAMPLE_MODEL_UNITS;
+                let remaining = spacing;
+                for (let i = 1; i < pts.length; i++) {
+                    let a = pts[i - 1];
+                    const b = pts[i];
+                    let distance = Math.hypot(b.x - a.x, b.y - a.y);
+                    while (distance >= remaining) {
+                        const fraction = remaining / distance;
+                        a = { x: a.x + (b.x - a.x) * fraction, y: a.y + (b.y - a.y) * fraction };
+                        out.push(a);
+                        distance -= remaining;
+                        remaining = spacing;
+                    }
+                    remaining -= distance;
+                }
+                const last = pts[pts.length - 1];
+                const previous = out[out.length - 1];
+                if (last.x !== previous.x || last.y !== previous.y) out.push({ x: last.x, y: last.y });
+                return out;
+            }
+
+            function saveSample() {
+                const totalPts = strokes.reduce((n, s) => n + s.length, 0);
+                if (!queue.length || currentStroke || totalPts < 2) {
+                    document.getElementById("sampleStatus").textContent = "Choose a prompt and finish writing before saving.";
+                    return;
+                }
+                const displayScale = canvas.getBoundingClientRect().width / canvas.width;
+                const resampled = strokes.filter((s) => s.length).map((s) => resampleStroke(
+                    s.map((p) => ({ x: p.x * displayScale, y: p.y * displayScale })),
+                ));
+                if (resampled.reduce((n, s) => n + s.length, 0) < 2) {
+                    document.getElementById("sampleStatus").textContent = "Write the whole phrase before saving.";
+                    return;
+                }
+                samples.push({ text: queue[idx], strokes: resampled });
+                document.getElementById("count").textContent = samples.length;
+                nextPrompt();
+                document.getElementById("sampleStatus").textContent = `Saved ${samples.length} sample${samples.length === 1 ? "" : "s"}. Draft kept in this browser.`;
+                saveDraft();
+            }
+
+            function round1(n) {
+                return Math.round(n * 10) / 10;
+            }
+
+            function downloadJSON() {
+                if (!samples.length || !Number.isFinite(pxPerModelUnit) || pxPerModelUnit <= 0) return;
+                const compact = {
+                    calibration_px_per_model_unit: pxPerModelUnit,
+                    resample_model_units: RESAMPLE_MODEL_UNITS,
+                    coordinate_system: "canvas_y_down",
+                    samples: samples.map((s) => ({
+                        text: s.text,
+                        // nested point arrays: stroke boundaries ARE the pen-lift signal, so
+                        // there's no need to repeat a pen_down flag on every single point
+                        strokes: s.strokes.map((stroke) =>
+                            stroke.map((p) => [round1(p.x), round1(p.y)]),
+                        ),
+                    })),
+                };
+                const blob = new Blob([JSON.stringify(compact)], { type: "application/json" });
+                const a = document.createElement("a");
+                const url = URL.createObjectURL(blob);
+                a.href = url;
+                a.download = "handwriting_samples.json";
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+            }
+
+            function mergePreviousFile(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                    try {
+                        const data = JSON.parse(reader.result);
+                        let prevSamples, prevCal;
+                        if (Array.isArray(data)) {
+                            // Convert old {points:[{x,y,pen_down}]} exports, including release endpoints.
+                            prevSamples = data.map((s) => {
+                                const strokesOut = [];
+                                let cur = [];
+                                for (const p of s.points) {
+                                    cur.push({ x: p.x, y: p.y });
+                                    if (p.pen_down === false) {
+                                        strokesOut.push(cur);
+                                        cur = [];
+                                    }
+                                }
+                                if (cur.length) strokesOut.push(cur);
+                                return { text: s.text, strokes: strokesOut };
+                            });
+                            prevCal = undefined;
+                        } else {
+                            prevSamples = (data.samples || []).map((s) => ({
+                                text: s.text,
+                                strokes: s.strokes.map((stroke) =>
+                                    stroke.map(([x, y]) => ({ x, y })),
+                                ),
+                            }));
+                            prevCal = data.calibration_px_per_model_unit;
+                        }
+                        for (const sample of prevSamples) {
+                            if (typeof sample.text !== "string" || !sample.text.trim() || /[\x00\r\n]/.test(sample.text)
+                                || !sample.strokes.length || sample.strokes.flat().length < 2
+                                || sample.strokes.flat().some((p) => !Number.isFinite(p.x) || !Number.isFinite(p.y))) {
+                                throw new Error("Every sample needs a phrase and finite stroke coordinates.");
+                            }
+                        }
+                        const estimated = prevCal === undefined;
+                        if (estimated) {
+                            const heights = prevSamples.map((s) => {
+                                const ys = s.strokes.flat().map((p) => p.y);
+                                return Math.max(...ys) - Math.min(...ys);
+                            }).filter((h) => h > 0).sort((a, b) => a - b);
+                            // shortcut: old files lack calibration; estimate from phrase height until a calibrated export is available.
+                            const middle = Math.floor(heights.length / 2);
+                            prevCal = heights.length
+                                ? (heights[middle] + heights[Math.floor((heights.length - 1) / 2)]) / 2 / REFERENCE_MODEL_UNIT_HEIGHT
+                                : 1;
+                        }
+                        if (!Number.isFinite(prevCal) || prevCal <= 0) {
+                            throw new Error("Calibration must be a finite positive number.");
+                        }
+                        const note = `Loaded ${prevSamples.length} sample(s). ${estimated ? 'Writing scale estimated.' : 'Their calibration is preserved.'}`;
+                        const scaleRatio = pxPerModelUnit / prevCal;
+                        samples.push(
+                            ...prevSamples.map((s) => ({
+                                text: s.text,
+                                strokes: s.strokes.map((st) => {
+                                    const points = st.map((p) => ({ x: p.x * scaleRatio, y: p.y * scaleRatio }));
+                                    return data.resample_model_units === RESAMPLE_MODEL_UNITS ? points : resampleStroke(points);
+                                }),
+                            })),
+                        );
+                        document.getElementById("count").textContent = samples.length;
+                        document.getElementById("mergeStatus").textContent = note;
+                        saveDraft();
+                    } catch (err) {
+                        document.getElementById("mergeStatus").textContent =
+                            "Could not read that file: " + err.message;
+                    }
+                };
+                reader.readAsText(file);
+            }
+
+            drawCalGuides();
+            document.getElementById("calibrationScreen").style.display = "block";
+            try {
+                const draft = JSON.parse(localStorage.getItem(DRAFT_KEY));
+                if (draft && Array.isArray(draft.queue) && draft.queue.every((text) => typeof text === "string")
+                    && Array.isArray(draft.samples) && Number.isFinite(draft.pxPerModelUnit) && draft.pxPerModelUnit > 0) {
+                    queue = draft.queue;
+                    idx = Number.isInteger(draft.idx) ? Math.max(0, Math.min(draft.idx, queue.length - 1)) : 0;
+                    samples = draft.samples;
+                    pxPerModelUnit = draft.pxPerModelUnit;
+                    document.getElementById("calibrationScreen").style.display = "none";
+                    document.getElementById("captureScreen").style.display = "block";
+                    document.getElementById("promptText").textContent = queue[idx] || "(queue empty — add more below)";
+                    clearCanvas();
+                    renderQueueList();
+                    document.getElementById("sampleStatus").textContent = "Previous draft restored. Continue writing or download your samples.";
+                }
+            } catch (_) { /* A missing or invalid draft must not block a new session. */ }
+            updateButtons();
+        </script>
+    </body>
+</html>

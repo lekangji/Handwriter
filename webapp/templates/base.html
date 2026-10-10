@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}AI Handwriter{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/">AI Handwriter</a>
+    <nav aria-label="Main navigation">
+      <a href="{{ url_for('write_page') }}" class="{{ 'active' if request.path == '/' else '' }}">Write &amp; Export</a>
+      <a href="{{ url_for('train_page') }}" class="{{ 'active' if request.path == '/train' else '' }}">Personalize</a>
+      <a href="{{ url_for('profiles_page') }}" class="{{ 'active' if request.path == '/profiles' else '' }}">Profiles</a>
+      <a href="/capture-tool" class="{{ 'active' if request.path == '/capture-tool' else '' }}">Capture samples</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      <div class="flash">
+        {% for m in messages %}<div>{{ m }}</div>{% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+
+<footer>
+  <p>Made for words worth writing. Preview your pages before sending them to your plotter.</p>
+</footer>
+</body>
+</html>
