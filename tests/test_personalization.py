@@ -45,11 +45,18 @@ class PersonalizationTests(unittest.TestCase):
         self.assertAlmostEqual(np.abs(loaded[1][0][:, 1].sum()), 100 / 3, places=4)
         self.assertLessEqual(np.linalg.norm(loaded[0][0][1:lifts[0] + 1, :2], axis=1).max(), .50001)
 
-    def test_old_calibrated_samples_are_resampled(self):
+    def test_old_calibrated_samples_preserve_recorded_sampling(self):
         offsets, _ = self.load({"calibration_px_per_model_unit": 2, "samples": [
             {"text": "a", "strokes": [[[0, 0], [4, 0]], [[6, 0]]]},
         ]})[0]
-        np.testing.assert_array_equal(offsets, [[0, 0, 0], [.5, 0, 0], [.5, 0, 0], [.5, 0, 0], [.5, 0, 1], [1, 0, 1]])
+        np.testing.assert_array_equal(offsets, [[0, 0, 0], [2, 0, 1], [1, 0, 1]])
+
+    def test_calibrated_capture_with_other_spacing_preserves_sampling(self):
+        offsets, _ = self.load({"calibration_px_per_model_unit": 2,
+                               "resample_model_units": 1, "samples": [
+            {"text": "a", "strokes": [[[0, 0], [2, 2], [4, 0]]]},
+        ]})[0]
+        np.testing.assert_array_equal(offsets, [[0, 0, 0], [1, -1, 0], [1, 1, 1]])
 
     def test_invalid_calibration_and_coordinates(self):
         sample = {"text": "hi", "strokes": [[[0, 0], [1, 1]]]}

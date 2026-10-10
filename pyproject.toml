@@ -14,10 +14,19 @@ dependencies = [
     "scipy>=1.15.3",
     "svgwrite>=1.4.3",
     "tensorflow>=2.21.0",
+    "torch>=2.7,<3",
 ]
 
 [project.scripts]
 ai-handwriter = "ai_handwriter:main"
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cuda" }]
 
 [build-system]
 requires = ["uv_build>=0.13.0,<0.14.0"]

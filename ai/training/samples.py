@@ -83,8 +83,11 @@ def load_training_samples(json_path):
     Also accepts the older flat-list `{"text","points":[{"x","y","pen_down"}]}`
     export format for backward compatibility with previously captured files
     — those have no calibration factor, so a shared scale is estimated from
-    their median phrase height. Old captures are resampled at half a model
-    unit, matching the current capture tool's spatial sampling.
+    their median phrase height and resampled at half a model unit.
+    Calibrated captures retain their recorded sampling, including older
+    exports without a resample_model_units marker. Densifying those paths
+    changes the recurrent sequence and can break pretrained text attention
+    even though their geometry is unchanged.
 
     Note on pen-up travel: like the previous version, points are only ever
     recorded while the pointer is physically down (no hover tracking), so
@@ -150,7 +153,7 @@ def load_training_samples(json_path):
 
     out = []
     for strokes, text in prepared:
-        if data.get("resample_model_units") != 0.5:
+        if "calibration_px_per_model_unit" not in data and data.get("resample_model_units") != 0.5:
             strokes = [_resample_stroke(xy, scale * 0.5) for xy in strokes]
         if sum(len(xy) for xy in strokes) < 2:
             continue

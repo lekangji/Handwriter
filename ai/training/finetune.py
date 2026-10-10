@@ -39,6 +39,8 @@ import os
 import time
 
 import numpy as np
+# Hide native informational startup messages while retaining warnings/errors.
+os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '1')
 try:
     import tensorflow as tf
 except ImportError:
@@ -49,7 +51,24 @@ from ai.inference.hw_model import LSTM_SIZE, NUM_ATTN_MIX, NUM_OUT_MIX, WEIGHTS_
 
 
 from ai.training.samples import build_alphabet, find_missing_chars, load_profile_alphabet, load_training_samples
-from ai.training.devices import configure_device
+from ai.training.devices import configure_device, normalize_device
+from ai.training.training_log import TrainingLog
+
+
+def create_training_model(alphabet=None, weights_path=WEIGHTS_PATH, seed=0, device='auto'):
+    """Prefer PyTorch CUDA, including on native Windows; retain CPU/TF support."""
+    device = normalize_device(device)
+    try:
+        import torch
+    except ImportError:
+        torch = None
+    if torch is not None and (tf is None or (device != 'cpu' and torch.cuda.is_available())):
+        from ai.training.torch_finetune import TorchHandwritingModel
+        return TorchHandwritingModel(alphabet, weights_path, seed, device)
+    if os.name == 'nt' and device.startswith('cuda'):
+        raise ValueError('Native Windows CUDA training requires CUDA-enabled PyTorch. '
+                         'Install requirements-cuda.txt in the app environment, then restart the app.')
+    return TrainableHandwritingModel(alphabet, weights_path, seed, device)
 
 
 class TrainableHandwritingModel:
@@ -235,6 +254,9 @@ def fit(model: TrainableHandwritingModel, samples, epochs=10, lr=1e-5, log_every
     progress_cb(epoch, epochs, epoch_loss, elapsed_s, eta_s), if given, is
     called after every epoch — used by the web UI and CLI to report
     per-epoch timing and an ETA instead of going silent until it's done."""
+    if getattr(model, 'backend', None) == 'torch':
+        from ai.training.torch_finetune import fit as torch_fit
+        return torch_fit(model, samples, epochs, lr, log_every, progress_cb)
     if tf is None:
         raise ImportError("TensorFlow is required for fine-tuning.")
     with tf.device(getattr(model, "device", "/CPU:0")):
@@ -258,10 +280,11 @@ def _fit(model, samples, epochs, lr, log_every, progress_cb):
         prepared.append((tf.convert_to_tensor(offsets), tf.convert_to_tensor(model.encode_text(text))))
     opt = tf.keras.optimizers.Adam(learning_rate=lr)
     history = []
-    t_start = time.time()
+    training_log = TrainingLog(model, samples, epochs, lr, log_every)
+    t_start = training_log.started
     for epoch in range(epochs):
         epoch_loss = 0.0
-        for offsets, onehot in prepared:
+        for sample_index, (offsets, onehot) in enumerate(prepared, 1):
             with tf.GradientTape() as tape:
                 loss = model.forward_loss(offsets, onehot)
             grads = tape.gradient(loss, model.trainable_variables)
@@ -273,13 +296,13 @@ def _fit(model, samples, epochs, lr, log_every, progress_cb):
             grads, _ = tf.clip_by_global_norm(grads, 5.0)
             opt.apply_gradients(zip(grads, model.trainable_variables))
             epoch_loss += float(loss)
+            training_log.sample(epoch, sample_index, epoch_loss)
         epoch_loss /= max(len(samples), 1)
         history.append(epoch_loss)
-        elapsed = time.time() - t_start
+        elapsed = time.monotonic() - t_start
         eta = (elapsed / (epoch + 1)) * (epochs - epoch - 1)
         if progress_cb:
             progress_cb(epoch, epochs, epoch_loss, elapsed, eta)
-        if epoch % log_every == 0 or epoch == epochs - 1:
-            print(f"epoch {epoch}: avg NLL = {epoch_loss:.3f}  "
-                  f"({elapsed:.1f}s elapsed, ~{eta:.1f}s remaining)")
+        training_log.epoch(epoch, epoch_loss, elapsed, eta)
+    training_log.finish(history, time.monotonic() - t_start)
     return history

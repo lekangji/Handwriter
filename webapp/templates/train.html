@@ -53,7 +53,7 @@
           <datalist id="trainingDevices">
             <option value="auto"><option value="cpu"><option value="cuda"><option value="cuda:0"><option value="cuda:1">
           </datalist>
-          <p class="hint">Auto prefers a GPU. Use cuda:1 to select a second visible GPU, including an external GPU. CUDA requires Linux or WSL2.</p>
+          <p class="hint">Auto prefers a GPU. Use cuda:1 for a second visible GPU, including an external GPU. Native Windows CUDA requires CUDA-enabled PyTorch (requirements-cuda.txt).</p>
         </div>
       </div>
 
@@ -81,11 +81,12 @@
         <tr><td>Training time</td><td id="rTime"></td></tr>
         <tr><td>Training device</td><td id="rDevice"></td></tr>
         <tr><td>Loss (start → end)</td><td id="rLoss"></td></tr>
+        <tr><td>Basic generation checks</td><td id="rChecks"></td></tr>
         <tr><td>Alphabet size</td><td id="rAlphaSize"></td></tr>
         <tr id="rNewCharsRow" style="display:none"><td>New characters added</td><td id="rNewChars"></td></tr>
       </table>
-      <p class="hint">Loss should go down. If it's not moving, or moved a lot in only a few epochs, you likely need
-        more samples for a stable fine-tune — a small dataset can overfit fast either way.</p>
+      <p class="hint">Lower training loss means better predictions on your samples, not necessarily better generated handwriting.
+        Profiles must pass basic generation checks before saving. Preview unseen phrases to check readability and your style.</p>
       <a class="primary" href="{{ url_for('write_page') }}">Go write something with it →</a>
     </div>
     <div id="resultError" role="alert" class="warn" style="display:none"></div>
@@ -133,6 +134,8 @@ function showLog(log) {
   document.getElementById('rTime').textContent = log.train_seconds + 's';
   document.getElementById('rDevice').textContent = log.device || 'auto';
   document.getElementById('rLoss').textContent = `${log.loss_start} → ${log.loss_end}`;
+  document.getElementById('rChecks').textContent = log.generation_checks_passed == null
+    ? 'Not recorded' : `${log.generation_checks_passed} passed`;
   document.getElementById('rAlphaSize').textContent = log.alphabet_size;
   document.getElementById('rNewCharsRow').style.display = log.new_chars.length ? '' : 'none';
   document.getElementById('rNewChars').textContent = log.new_chars.join(' ');
@@ -149,6 +152,7 @@ async function resumeTraining(id) {
       progressBar.value = job.progress;
       progressText.textContent = job.status === 'training'
         ? `Epoch ${job.epoch}/${job.epochs} · ${job.device || 'auto'} · loss ${job.loss} · about ${job.eta_s}s remaining`
+        : job.status === 'validating' ? 'Checking generated handwriting before saving…'
         : 'Preparing your handwriting profile…';
     });
     showLog(log);

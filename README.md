@@ -41,33 +41,42 @@ Printer and paper coordinates still need calibration. SVG, PNG, and G-code use t
 
 Capture converts browser y-down positions into the model's y-up offsets, preserves pen lifts and dots, and resamples by distance in calibrated model units. Merged sessions retain their physical scale. The training graph uses a dynamic TensorFlow loop, validates finite losses and gradients, and defaults to a conservative learning rate of `0.00001`. More epochs on very few samples can overfit; add varied clear phrases rather than simply increasing epochs.
 
+Before a new profile is saved, its exported weights must complete four deterministic generation checks using the normal inference limits. Failed profiles are discarded with an error even if training NLL improved. These are basic generation checks, not a test of readability or personal style; inspect generated phrases you did not capture. Existing profiles are preserved.
+
 Web training permits up to 800 sample-epochs. For larger datasets:
 
 ```powershell
 python -m ai.training.finetune_cli handwriting_samples.json --name my_handwriting --epochs 20 --lr 0.00001
 ```
 
-A grown source profile keeps its alphabet order; new characters are appended once. Old flat exports and earlier calibrated exports are converted and resampled automatically for the current training method. Uncalibrated files use a shared scale estimated from median phrase height. Previously trained profiles affected by the old coordinate or alphabet bugs should be rebuilt under a new name. Fixing the pipeline does not repair those saved weights.
+A grown source profile keeps its alphabet order; new characters are appended once. Calibrated exports preserve their recorded point sampling, including older files without a resampling marker: densifying them can disrupt pretrained text attention while making NLL look better. Uncalibrated files use a shared scale estimated from median phrase height and half-unit resampling. Profiles trained with the earlier densification, coordinate or alphabet bugs should be rebuilt from default under a new name. Fixing the pipeline does not repair those saved weights.
 
 ### CUDA and external GPUs
 
-Training defaults to `auto`: the first TensorFlow-visible GPU, otherwise CPU. Set **Training device** on Personalize or pass `--device cpu`, `--device cuda`, or `--device cuda:1` to the CLI. Explicit CUDA requests fail with setup instructions when the requested GPU is unavailable. The selected device appears in progress and results. GPU memory grows as needed instead of reserving all GPU RAM.
+Training defaults to `auto`: PyTorch CUDA when available (including native Windows), otherwise TensorFlow GPU/CPU. Set **Training device** on Personalize or pass `--device cpu`, `--device cuda`, or `--device cuda:1` to the CLI. Explicit CUDA requests fail with setup instructions when the requested GPU is unavailable. The selected device appears in progress and results. Both training backends export the same NPZ profiles for NumPy inference.
 
-For NVIDIA CUDA training, use Linux or WSL2 with a compatible NVIDIA driver. Modern TensorFlow does not support CUDA on native Windows; see the [TensorFlow installation guide](https://www.tensorflow.org/install/pip). Create a separate Linux/WSL2 Python environment rather than reusing a Windows environment:
+For NVIDIA CUDA training on Windows, Linux, or WSL2, install CUDA-enabled PyTorch in the same environment used to run the app. A compatible NVIDIA driver is required; see the [PyTorch installation guide](https://pytorch.org/get-started/locally/). From your activated environment:
 
 ```bash
-python3 -m venv .venv-cuda
-source .venv-cuda/bin/activate
+pip install -r requirements.txt
 pip install -r requirements-cuda.txt
-python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
 python -m ai.training.finetune_cli handwriting_samples.json --name my_cuda_profile --device cuda --epochs 20
 # Or run the web app in the same environment:
 python app.py
 ```
 
-An attached NVIDIA external GPU works when the OS and TensorFlow expose it. Indices follow TensorFlow's visible GPUs. Use `--device cuda:1` for the second GPU, or `CUDA_VISIBLE_DEVICES=1 python -m ai.training.finetune_cli handwriting_samples.json --name external_profile --device cuda` to expose only that GPU (then indexed as `cuda:0`). Training uses one selected GPU per job.
+Restart the app after installation or code changes. A job already running on CPU stays on CPU; new jobs use the updated backend. Choose `cuda` to require GPU training instead of allowing CPU fallback. CUDA-enabled PyTorch is a normal project dependency. With uv, install and run using `uv sync` and `uv run python app.py`; no extra flag is needed.
+
+An attached NVIDIA external GPU works when the OS and PyTorch expose it. Indices follow visible GPUs. Use `--device cuda:1` for the second GPU, or `CUDA_VISIBLE_DEVICES=1 python -m ai.training.finetune_cli handwriting_samples.json --name external_profile --device cuda` to expose only that GPU (then indexed as `cuda:0`). Training uses one selected GPU per job.
 
 For a remote/cloud GPU, copy this project, the samples JSON, and the source profile's `.npz` and `.alphabet.json` to the GPU machine, install `requirements-cuda.txt`, and run the same CLI there. Copy both resulting profile files from `profiles/` back to your local `profiles/` folder. This is a CLI workflow; the local web app does not submit remote jobs.
+
+### Backend logs
+
+Successful job polling and static-file requests are quiet by default. Failed requests and server warnings remain visible. Training logs include the backend/device, dataset size, epochs, learning rate, epoch NLL and change, best NLL, timing, ETA, and throughput. Long epochs report sample progress at most once every 30 seconds. Profile saves and job failures include their job ID; failures retain their traceback. Sample text is not logged.
+
+Set `HANDWRITER_LOG_LEVEL` to `DEBUG` for full request logs and extra job details, or `WARNING` to silence training summaries. The default is `INFO`. This applies to both the web app and training CLI. TensorFlow native startup information is hidden; warnings and errors remain visible. An explicit `TF_CPP_MIN_LOG_LEVEL` value takes precedence.
 
 ## Checks
 

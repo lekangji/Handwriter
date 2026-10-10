@@ -8,13 +8,20 @@ Usage:
     python -m ai.training.finetune_cli samples.json --name my_handwriting --extra-chars "&@+=" --epochs 30 --base default
 """
 import argparse
+import logging
 import os
 import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ai.training.finetune import TrainableHandwritingModel, load_training_samples, fit, build_alphabet, load_profile_alphabet
+from ai.logging_utils import configure_logging
+
+configure_logging()
+logger = logging.getLogger('ai.training.cli')
+
+from ai.training.finetune import create_training_model, load_training_samples, fit, build_alphabet, load_profile_alphabet
 from ai.training.devices import normalize_device
+from ai.training.validation import save_validated_profile
 
 PROFILES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "profiles")
 
@@ -44,7 +51,7 @@ def main():
         p.error("That profile already exists. Choose a new name to preserve it.")
 
     samples = load_training_samples(args.samples_json)
-    print(f"Loaded {len(samples)} samples from {args.samples_json}")
+    logger.debug('Loaded %d samples from %s', len(samples), args.samples_json)
     if len(samples) == 0:
         print("No usable samples — check the capture tool export.", file=sys.stderr)
         sys.exit(1)
@@ -56,18 +63,19 @@ def main():
 
     alphabet = build_alphabet(args.extra_chars, load_profile_alphabet(base_weights), samples)
 
+    logger.info('Training profile=%s base=%s requested_device=%s', args.name, args.base, args.device)
     try:
-        model = TrainableHandwritingModel(alphabet=alphabet, weights_path=base_weights, device=args.device)
+        model = create_training_model(alphabet=alphabet, weights_path=base_weights, device=args.device)
     except (ImportError, ValueError) as error:
         p.error(str(error))
-    print(f"Training device: {model.device}")
-    print(f"Alphabet size: {len(alphabet)} ({len(alphabet) - 73} new char(s))" if len(alphabet) > 73 else "Alphabet unchanged (73 chars)")
     fit(model, samples, epochs=args.epochs, lr=args.lr, log_every=max(1, args.epochs // 20))
 
     os.makedirs(args.profiles_dir, exist_ok=True)
-    model.export_to_npz(out_path)
-    print(f"Saved profile '{args.name}' -> {out_path}")
-    print("It'll now appear in the Write & Export page's profile dropdown (restart the web app if it's already running).")
+    try:
+        save_validated_profile(model, out_path)
+    except ValueError as error:
+        p.error(str(error))
+    logger.info('Training profile saved profile=%s path=%s', args.name, out_path)
 
 
 if __name__ == "__main__":

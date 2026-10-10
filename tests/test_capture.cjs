@@ -18,10 +18,13 @@ function element(id) {
     return elements.get(id);
 }
 const storage = new Map();
+let exportedBlob;
 const context = vm.createContext({
     console, setTimeout, document: { getElementById: element, createElement: () => element(Symbol()) },
     localStorage: { getItem: (key) => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) },
     FileReader: class { readAsText(file) { this.result = JSON.stringify(file.data); this.onload(); } },
+    Blob: class { constructor(parts) { this.text = parts.join(''); } },
+    URL: { createObjectURL(blob) { exportedBlob = blob; return 'blob:test'; }, revokeObjectURL() {} },
     assert,
 });
 vm.runInContext(script + `
@@ -42,6 +45,8 @@ vm.runInContext(script + `
     mergePreviousFile({target: oldFile});
     assert.equal(samples.length, 2);
     assert.equal(samples[1].strokes[0][0].x, 4, 'merged sample must retain its original model scale');
+    assert.equal(samples[1].strokes[0].length, 2, 'calibrated legacy merge must preserve recorded sampling');
+    assert.equal(samples[1].strokes[0][1].y, 12, 'calibrated legacy merge must preserve the endpoint');
     assert.equal(JSON.parse(localStorage.getItem(DRAFT_KEY)).samples.length, 2);
     mergePreviousFile({target: {files: [{data: {calibration_px_per_model_unit: 0, samples: []}}]}});
     assert.equal(samples.length, 2, 'invalid merge must leave saved samples intact');
@@ -54,4 +59,10 @@ vm.runInContext(script + `
     assert.equal(samples[2].strokes[0].at(-1).y, 100, 'estimated legacy scale retains release endpoint');
     assert.equal(samples[2].strokes[1].length, 1, 'legacy dots survive');
 `, context);
+vm.runInContext('downloadJSON()', context);
+const exported = JSON.parse(exportedBlob.text);
+assert.equal(exported.calibration_px_per_model_unit, 4);
+assert.equal(exported.samples[1].strokes[0].length, 2, 'download must retain imported sampling');
+assert.deepEqual(exported.samples[1].strokes[0], [[4, 8], [8, 12]]);
+assert.equal('resample_model_units' in exported, false, 'mixed sampling must not claim uniform spacing');
 console.log('Capture checks passed: resampling, dots, pointers, responsive calibration, merge, draft.');

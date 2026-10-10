@@ -22,13 +22,19 @@ import glob
 import json
 import os
 import time
-import traceback
+import logging
 import math
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import uuid
 
 from flask import Flask, render_template, request, send_file, url_for, jsonify, redirect
+
+from ai.logging_utils import configure_logging
+from ai.training.validation import save_validated_profile
+
+configure_logging()
+logger = logging.getLogger('ai.web')
 
 from ai.inference.hw_model import HandwritingModel, ALPHABET, sanitize_line
 from document.calibration import PageTemplate, PrinterProfile
@@ -58,7 +64,7 @@ _WORKER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="handwriter")
 
 def _start_job(kind, work):
     with _JOB_LOCK:
-        if any(job["status"] in ("queued", "starting", "generating", "rendering", "training") for job in _JOBS.values()):
+        if any(job["status"] not in ("done", "error") for job in _JOBS.values()):
             raise ValueError("Another job is running. Wait for it to finish.")
         while len(_JOBS) >= MAX_OUTPUT_JOBS:
             del _JOBS[next(iter(_JOBS))]
@@ -71,10 +77,14 @@ def _start_job(kind, work):
                 _JOBS[job_id].update(values, elapsed_s=round(time.monotonic() - started, 1))
         try:
             update(status="starting")
+            logger.debug('Job started job=%s kind=%s', job_id, kind)
             result = work(job_id, update)
             update(status="done", progress=100, result=result)
+            logger.debug('Job finished job=%s kind=%s elapsed_s=%.1f',
+                         job_id, kind, time.monotonic() - started)
         except Exception as error:
-            traceback.print_exc()
+            logger.exception('Job failed job=%s kind=%s elapsed_s=%.1f',
+                             job_id, kind, time.monotonic() - started)
             update(status="error", error=str(error))
     _WORKER.submit(run)
     return job_id
@@ -369,20 +379,28 @@ def train_run():
             raise ValueError("Web training allows up to 800 sample-epochs. Reduce epochs or use python -m ai.training.finetune_cli.")
         alphabet = build_alphabet(request.form.get("extra_chars", ""), load_profile_alphabet(base_weights), samples)
         def work(job_id, update):
-            from ai.training.finetune import TrainableHandwritingModel, fit
-            model = TrainableHandwritingModel(alphabet=alphabet, weights_path=base_weights, device=device)
+            logger.info('Training job=%s profile=%s base=%s requested_device=%s '
+                        'samples=%d epochs=%d lr=%g alphabet=%d',
+                        job_id, profile_name, base_profile, device, len(samples), epochs, lr, len(alphabet))
+            from ai.training.finetune import create_training_model, fit
+            model = create_training_model(alphabet=alphabet, weights_path=base_weights, device=device)
             update(device=model.device)
             started = time.monotonic()
             def progress(epoch, total, loss, elapsed, eta):
                 update(status="training", progress=round((epoch + 1) / total * 95), epoch=epoch + 1,
                        epochs=total, loss=round(loss, 3), eta_s=round(eta, 1))
             history = fit(model, samples, epochs=epochs, lr=lr, progress_cb=progress)
-            model.export_to_npz(os.path.join(PROFILES_DIR, f"{profile_name}.npz"))
+            output_path = os.path.join(PROFILES_DIR, f"{profile_name}.npz")
+            logger.debug('Saving training profile job=%s path=%s', job_id, output_path)
+            update(status="validating", progress=97)
+            validation = save_validated_profile(model, output_path)
+            logger.info('Training profile saved job=%s profile=%s path=%s', job_id, profile_name, output_path)
             _MODEL_CACHE.pop(profile_name, None)
             return {"profile_name": profile_name, "num_samples": len(samples), "epochs": epochs, "device": model.device,
                     "train_seconds": round(time.monotonic() - started, 1), "loss_start": round(history[0], 3),
                     "loss_end": round(history[-1], 3), "alphabet_size": len(alphabet),
-                    "new_chars": [c for c in alphabet if c not in ALPHABET], "profiles": list_profiles()}
+                    "new_chars": [c for c in alphabet if c not in ALPHABET], "profiles": list_profiles(),
+                    "generation_checks_passed": validation['passed']}
         job_id = _start_job("training", work)
         return jsonify(job_id=job_id, progress_url=f"/jobs/{job_id}"), 202
     except (ValueError, TypeError, KeyError) as error:
