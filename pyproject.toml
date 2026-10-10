@@ -1,0 +1,24 @@
+[project]
+name = "ai-handwriter"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "22yeets22", email = "132288501+22yeets22@users.noreply.github.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "flask>=3.1.3",
+    "matplotlib>=3.10.9",
+    "numpy>=2.2.6",
+    "scipy>=1.15.3",
+    "svgwrite>=1.4.3",
+    "tensorflow>=2.21.0",
+]
+
+[project.scripts]
+ai-handwriter = "ai_handwriter:main"
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14.0"]
+build-backend = "uv_build"

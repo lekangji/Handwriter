@@ -49,6 +49,26 @@ python -m ai.training.finetune_cli handwriting_samples.json --name my_handwritin
 
 A grown source profile keeps its alphabet order; new characters are appended once. Old flat exports and earlier calibrated exports are converted and resampled automatically for the current training method. Uncalibrated files use a shared scale estimated from median phrase height. Previously trained profiles affected by the old coordinate or alphabet bugs should be rebuilt under a new name. Fixing the pipeline does not repair those saved weights.
 
+### CUDA and external GPUs
+
+Training defaults to `auto`: the first TensorFlow-visible GPU, otherwise CPU. Set **Training device** on Personalize or pass `--device cpu`, `--device cuda`, or `--device cuda:1` to the CLI. Explicit CUDA requests fail with setup instructions when the requested GPU is unavailable. The selected device appears in progress and results. GPU memory grows as needed instead of reserving all GPU RAM.
+
+For NVIDIA CUDA training, use Linux or WSL2 with a compatible NVIDIA driver. Modern TensorFlow does not support CUDA on native Windows; see the [TensorFlow installation guide](https://www.tensorflow.org/install/pip). Create a separate Linux/WSL2 Python environment rather than reusing a Windows environment:
+
+```bash
+python3 -m venv .venv-cuda
+source .venv-cuda/bin/activate
+pip install -r requirements-cuda.txt
+python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+python -m ai.training.finetune_cli handwriting_samples.json --name my_cuda_profile --device cuda --epochs 20
+# Or run the web app in the same environment:
+python app.py
+```
+
+An attached NVIDIA external GPU works when the OS and TensorFlow expose it. Indices follow TensorFlow's visible GPUs. Use `--device cuda:1` for the second GPU, or `CUDA_VISIBLE_DEVICES=1 python -m ai.training.finetune_cli handwriting_samples.json --name external_profile --device cuda` to expose only that GPU (then indexed as `cuda:0`). Training uses one selected GPU per job.
+
+For a remote/cloud GPU, copy this project, the samples JSON, and the source profile's `.npz` and `.alphabet.json` to the GPU machine, install `requirements-cuda.txt`, and run the same CLI there. Copy both resulting profile files from `profiles/` back to your local `profiles/` folder. This is a CLI workflow; the local web app does not submit remote jobs.
+
 ## Checks
 
 ```powershell

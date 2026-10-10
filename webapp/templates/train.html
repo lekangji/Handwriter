@@ -47,6 +47,14 @@
           <input id="learning_rate" name="learning_rate" type="number" min="0.000001" max="0.001" step="0.000001" value="0.00001" required>
           <p class="hint">Start small to preserve readable letters. Large values can erase what the model knows.</p>
         </div>
+        <div>
+          <label for="device">Training device</label>
+          <input id="device" name="device" value="auto" list="trainingDevices" required pattern="auto|cpu|cuda(:[0-9]+)?">
+          <datalist id="trainingDevices">
+            <option value="auto"><option value="cpu"><option value="cuda"><option value="cuda:0"><option value="cuda:1">
+          </datalist>
+          <p class="hint">Auto prefers a GPU. Use cuda:1 to select a second visible GPU, including an external GPU. CUDA requires Linux or WSL2.</p>
+        </div>
       </div>
 
       <p class="hint">Runs in the background. Web training is capped to keep the workload reasonable
@@ -71,6 +79,7 @@
         <tr><td>Samples used</td><td id="rSamples"></td></tr>
         <tr><td>Epochs</td><td id="rEpochs"></td></tr>
         <tr><td>Training time</td><td id="rTime"></td></tr>
+        <tr><td>Training device</td><td id="rDevice"></td></tr>
         <tr><td>Loss (start → end)</td><td id="rLoss"></td></tr>
         <tr><td>Alphabet size</td><td id="rAlphaSize"></td></tr>
         <tr id="rNewCharsRow" style="display:none"><td>New characters added</td><td id="rNewChars"></td></tr>
@@ -122,6 +131,7 @@ function showLog(log) {
   document.getElementById('rSamples').textContent = log.num_samples;
   document.getElementById('rEpochs').textContent = log.epochs;
   document.getElementById('rTime').textContent = log.train_seconds + 's';
+  document.getElementById('rDevice').textContent = log.device || 'auto';
   document.getElementById('rLoss').textContent = `${log.loss_start} → ${log.loss_end}`;
   document.getElementById('rAlphaSize').textContent = log.alphabet_size;
   document.getElementById('rNewCharsRow').style.display = log.new_chars.length ? '' : 'none';
@@ -138,7 +148,7 @@ async function resumeTraining(id) {
     const log = await HandwriterJobs.wait(id, job => {
       progressBar.value = job.progress;
       progressText.textContent = job.status === 'training'
-        ? `Epoch ${job.epoch}/${job.epochs} · loss ${job.loss} · about ${job.eta_s}s remaining`
+        ? `Epoch ${job.epoch}/${job.epochs} · ${job.device || 'auto'} · loss ${job.loss} · about ${job.eta_s}s remaining`
         : 'Preparing your handwriting profile…';
     });
     showLog(log);

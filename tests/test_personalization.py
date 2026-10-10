@@ -1,4 +1,6 @@
 import json
+import os
+import tempfile
 from io import StringIO
 import unittest
 import warnings
@@ -94,6 +96,35 @@ class PersonalizationTests(unittest.TestCase):
             history = finetune.fit(model, samples, epochs=1)
         self.assertTrue(np.isfinite(history).all())
         self.assertTrue(all(np.isfinite(variable.numpy()).all() for variable in model.trainable_variables))
+
+    def train_and_export_on_device(self, device):
+        from ai.inference.hw_model import HandwritingModel
+        model = finetune.TrainableHandwritingModel(device=device)
+        expected_device = 'GPU:0' if device == 'cuda' else 'CPU:0'
+        self.assertTrue(all(expected_device in variable.device for variable in model.trainable_variables))
+        before = model.gmm_b.numpy().copy()
+        samples = [(np.array([[0, 0, 0], [1, 1, 0], [1, -1, 1]], np.float32), 'a')]
+        history = finetune.fit(model, samples, epochs=1)
+        self.assertTrue(np.isfinite(history).all())
+        self.assertFalse(np.array_equal(before, model.gmm_b.numpy()))
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, 'trained.npz')
+            model.export_to_npz(path)
+            alphabet = finetune.load_profile_alphabet(path)
+            loaded = HandwritingModel(weights_path=path, alphabet=alphabet)
+            self.assertEqual(alphabet, model.alphabet)
+            np.testing.assert_array_equal(loaded.gmm_b, model.gmm_b.numpy())
+            np.testing.assert_array_equal(loaded.lstm1.kernel, model.lstm1_k.numpy())
+
+    @unittest.skipIf(finetune.tf is None, 'TensorFlow is not installed')
+    def test_cpu_training_updates_and_exports_compatible_profile(self):
+        self.train_and_export_on_device('cpu')
+
+    @unittest.skipIf(finetune.tf is None, 'TensorFlow is not installed')
+    def test_cuda_training_updates_and_exports_compatible_profile(self):
+        if not finetune.tf.config.list_logical_devices('GPU'):
+            self.skipTest('TensorFlow has no CUDA GPU')
+        self.train_and_export_on_device('cuda')
 
 
 if __name__ == "__main__":

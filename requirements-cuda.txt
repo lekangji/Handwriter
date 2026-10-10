@@ -1,0 +1,3 @@
+# Install on Linux or WSL2 with an NVIDIA GPU and compatible driver.
+-r requirements.txt
+tensorflow[and-cuda]

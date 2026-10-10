@@ -134,8 +134,40 @@ class WebTests(unittest.TestCase):
             work('test', lambda **values: None)
             return 'test'
         with patch('app._start_job', side_effect=start), patch('ai.training.finetune.TrainableHandwritingModel') as model, patch('ai.training.finetune.fit', return_value=[1.0]):
+            model.return_value.device = '/CPU:0'
             response = self.client.post('/train/run', data=fields())
         self.assertEqual(response.status_code, 202, response.json)
         self.assertTrue(set('Z&→').issubset(model.call_args.kwargs['alphabet']))
+
+    def test_training_rejects_invalid_device_before_starting_job(self):
+        data = json.dumps({'calibration_px_per_model_unit': 2, 'samples': [
+            {'text': 'hi', 'strokes': [[[0, 0], [4, 2]]]},
+        ]}).encode()
+        response = self.client.post('/train/run', data={
+            'profile_name': 'new_profile', 'device': 'cuda:-1',
+            'samples_json': (io.BytesIO(data), 'samples.json'),
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Training device', response.json['error'])
+
+    def test_training_reports_selected_external_gpu(self):
+        data = json.dumps({'calibration_px_per_model_unit': 2, 'samples': [
+            {'text': 'hi', 'strokes': [[[0, 0], [4, 2]]]},
+        ]}).encode()
+        result = {}
+        updates = []
+        def start(kind, work):
+            result.update(work('test', lambda **values: updates.append(values)))
+            return 'test'
+        with patch('app._start_job', side_effect=start), patch('ai.training.finetune.TrainableHandwritingModel') as model, patch('ai.training.finetune.fit', return_value=[1.0]):
+            model.return_value.device = '/GPU:1'
+            response = self.client.post('/train/run', data={
+                'profile_name': 'new_profile', 'device': 'cuda:1',
+                'samples_json': (io.BytesIO(data), 'samples.json'),
+            })
+        self.assertEqual(response.status_code, 202, response.json)
+        self.assertEqual(model.call_args.kwargs['device'], 'cuda:1')
+        self.assertEqual(result['device'], '/GPU:1')
+        self.assertIn({'device': '/GPU:1'}, updates)
 
 if __name__=='__main__':unittest.main()

@@ -346,6 +346,7 @@ def train_check_alphabet():
 def train_run():
     try:
         from ai.training.samples import load_training_samples, build_alphabet, load_profile_alphabet
+        from ai.training.devices import normalize_device
         upload = request.files.get("samples_json")
         if not upload or not upload.filename:
             raise ValueError("Choose a samples JSON file exported from Capture samples.")
@@ -358,6 +359,7 @@ def train_run():
             raise ValueError("Choose an existing base profile.")
         epochs = form_int("epochs", 10, 1, 40)
         lr = form_float("learning_rate", 0.00001, 0.000001, 0.001)
+        device = normalize_device(request.form.get("device", "auto"))
         base_weights = os.path.join(PROFILES_DIR, f"{base_profile}.npz")
         # Parse and validate before constructing TensorFlow or starting a job.
         samples = load_training_samples(upload.stream)
@@ -368,7 +370,8 @@ def train_run():
         alphabet = build_alphabet(request.form.get("extra_chars", ""), load_profile_alphabet(base_weights), samples)
         def work(job_id, update):
             from ai.training.finetune import TrainableHandwritingModel, fit
-            model = TrainableHandwritingModel(alphabet=alphabet, weights_path=base_weights)
+            model = TrainableHandwritingModel(alphabet=alphabet, weights_path=base_weights, device=device)
+            update(device=model.device)
             started = time.monotonic()
             def progress(epoch, total, loss, elapsed, eta):
                 update(status="training", progress=round((epoch + 1) / total * 95), epoch=epoch + 1,
@@ -376,7 +379,7 @@ def train_run():
             history = fit(model, samples, epochs=epochs, lr=lr, progress_cb=progress)
             model.export_to_npz(os.path.join(PROFILES_DIR, f"{profile_name}.npz"))
             _MODEL_CACHE.pop(profile_name, None)
-            return {"profile_name": profile_name, "num_samples": len(samples), "epochs": epochs,
+            return {"profile_name": profile_name, "num_samples": len(samples), "epochs": epochs, "device": model.device,
                     "train_seconds": round(time.monotonic() - started, 1), "loss_start": round(history[0], 3),
                     "loss_end": round(history[-1], 3), "alphabet_size": len(alphabet),
                     "new_chars": [c for c in alphabet if c not in ALPHABET], "profiles": list_profiles()}

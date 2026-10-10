@@ -14,6 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ai.training.finetune import TrainableHandwritingModel, load_training_samples, fit, build_alphabet, load_profile_alphabet
+from ai.training.devices import normalize_device
 
 PROFILES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "profiles")
 
@@ -26,8 +27,13 @@ def main():
     p.add_argument("--extra-chars", default="", help="New characters to add to the alphabet, e.g. '&@+='")
     p.add_argument("--epochs", type=int, default=20)
     p.add_argument("--lr", type=float, default=1e-5)
+    p.add_argument("--device", default="auto", help="Training device: auto (prefer GPU), cpu, cuda, or cuda:N (visible GPU index)")
     p.add_argument("--profiles-dir", default=PROFILES_DIR, help="Where profiles live (default: profiles)")
     args = p.parse_args()
+    try:
+        args.device = normalize_device(args.device)
+    except ValueError as error:
+        p.error(str(error))
     for name in (args.name, args.base):
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", name):
             p.error("Profile names must contain only letters, digits, underscores or hyphens (1–80 characters).")
@@ -50,7 +56,11 @@ def main():
 
     alphabet = build_alphabet(args.extra_chars, load_profile_alphabet(base_weights), samples)
 
-    model = TrainableHandwritingModel(alphabet=alphabet, weights_path=base_weights)
+    try:
+        model = TrainableHandwritingModel(alphabet=alphabet, weights_path=base_weights, device=args.device)
+    except (ImportError, ValueError) as error:
+        p.error(str(error))
+    print(f"Training device: {model.device}")
     print(f"Alphabet size: {len(alphabet)} ({len(alphabet) - 73} new char(s))" if len(alphabet) > 73 else "Alphabet unchanged (73 chars)")
     fit(model, samples, epochs=args.epochs, lr=args.lr, log_every=max(1, args.epochs // 20))
 

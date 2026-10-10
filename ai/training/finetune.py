@@ -49,12 +49,14 @@ from ai.inference.hw_model import LSTM_SIZE, NUM_ATTN_MIX, NUM_OUT_MIX, WEIGHTS_
 
 
 from ai.training.samples import build_alphabet, find_missing_chars, load_profile_alphabet, load_training_samples
+from ai.training.devices import configure_device
 
 
 class TrainableHandwritingModel:
-    def __init__(self, alphabet=None, weights_path: str = WEIGHTS_PATH, seed=0):
+    def __init__(self, alphabet=None, weights_path: str = WEIGHTS_PATH, seed=0, device="auto"):
         if tf is None:
             raise ImportError("TensorFlow is required for fine-tuning; sample capture and validation work without it.")
+        self.device = configure_device(device, tf)
         source_alphabet = load_profile_alphabet(weights_path)
         self.alphabet = list(source_alphabet if alphabet is None else alphabet)
         if self.alphabet[:len(source_alphabet)] != source_alphabet or len(set(self.alphabet)) != len(self.alphabet):
@@ -94,7 +96,8 @@ class TrainableHandwritingModel:
         k3 = grow_rows(k3, old_a, self.A, w_block_start=403, w_block_len=old_a)
 
         def tv(x, name):
-            return tf.Variable(x.astype(np.float32), name=name)
+            with tf.device(self.device):
+                return tf.Variable(x.astype(np.float32), name=name)
 
         self.lstm1_k, self.lstm1_b = tv(k1, "lstm1_k"), tv(g("rnn/LSTMAttentionCell/lstm_cell/bias"), "lstm1_b")
         self.lstm2_k, self.lstm2_b = tv(k2, "lstm2_k"), tv(g("rnn/LSTMAttentionCell/lstm_cell_1/bias"), "lstm2_b")
@@ -142,7 +145,8 @@ class TrainableHandwritingModel:
         avoiding a separate graph containing thousands of unrolled steps
         for each captured phrase.
         """
-        return self._forward_loss_impl(offsets, onehot_text)
+        with tf.device(getattr(self, "device", "/CPU:0")):
+            return self._forward_loss_impl(offsets, onehot_text)
 
     @(tf.function(reduce_retracing=True) if tf is not None else lambda fn: fn)
     def _forward_loss_impl(self, offsets, onehot_text):
@@ -233,6 +237,11 @@ def fit(model: TrainableHandwritingModel, samples, epochs=10, lr=1e-5, log_every
     per-epoch timing and an ETA instead of going silent until it's done."""
     if tf is None:
         raise ImportError("TensorFlow is required for fine-tuning.")
+    with tf.device(getattr(model, "device", "/CPU:0")):
+        return _fit(model, samples, epochs, lr, log_every, progress_cb)
+
+
+def _fit(model, samples, epochs, lr, log_every, progress_cb):
     if not samples:
         raise ValueError("No usable handwriting samples.")
     if epochs < 1 or log_every < 1 or not np.isfinite(lr) or lr <= 0:
