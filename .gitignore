@@ -21,7 +21,6 @@ htmlcov/
 # Generated output and personal handwriting data
 /webapp/static/previews/
 /webapp/static/downloads/
-/profiles/
 /samples/
 
 # Operating system files
