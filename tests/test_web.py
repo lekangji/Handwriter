@@ -133,7 +133,7 @@ class WebTests(unittest.TestCase):
         def start(kind, work):
             work('test', lambda **values: None)
             return 'test'
-        with patch('app._start_job', side_effect=start), patch('ai.training.finetune.create_training_model') as model, patch('ai.training.finetune.fit', return_value=[1.0]), patch('app.save_validated_profile', return_value={'passed': 4, 'failed': []}):
+        with patch('app._start_job', side_effect=start), patch('ai.training.finetune.create_training_model') as model, patch('ai.training.personalization.fit_personalized', return_value=([1.0], {})), patch('app.save_validated_profile', return_value={'passed': 4, 'failed': []}):
             model.return_value.device = '/CPU:0'
             response = self.client.post('/train/run', data=fields())
         self.assertEqual(response.status_code, 202, response.json)
@@ -154,7 +154,7 @@ class WebTests(unittest.TestCase):
                 def start(kind, work):
                     result.update(work('test', lambda **values: None))
                     return 'test'
-                with patch('app.PROFILES_DIR', directory), patch('app._start_job', side_effect=start), patch('ai.training.finetune.create_training_model') as model, patch('ai.training.finetune.fit', return_value=[1.0]), patch('app.save_validated_profile', return_value={'passed': 4, 'failed': []}):
+                with patch('app.PROFILES_DIR', directory), patch('app._start_job', side_effect=start), patch('ai.training.finetune.create_training_model') as model, patch('ai.training.personalization.fit_personalized', return_value=([1.0], {})), patch('app.save_validated_profile', return_value={'passed': 4, 'failed': []}):
                     model.return_value.device = '/CPU:0'
                     response = self.client.post('/train/run', data={
                         'profile_name': 'continued', 'base_profile': 'personal', 'epochs': '1',
@@ -184,7 +184,7 @@ class WebTests(unittest.TestCase):
         def start(kind, work):
             result.update(work('test', lambda **values: updates.append(values)))
             return 'test'
-        with patch('app._start_job', side_effect=start), patch('ai.training.finetune.create_training_model') as model, patch('ai.training.finetune.fit', return_value=[1.0]), patch('app.save_validated_profile', return_value={'passed': 4, 'failed': []}):
+        with patch('app._start_job', side_effect=start), patch('ai.training.finetune.create_training_model') as model, patch('ai.training.personalization.fit_personalized', return_value=([1.0], {})), patch('app.save_validated_profile', return_value={'passed': 4, 'failed': []}):
             model.return_value.device = '/GPU:1'
             response = self.client.post('/train/run', data={
                 'profile_name': 'new_profile', 'device': 'cuda:1',

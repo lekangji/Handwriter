@@ -22,6 +22,8 @@ logger = logging.getLogger('ai.training.cli')
 from ai.training.finetune import create_training_model, load_training_samples, fit, build_alphabet, load_profile_alphabet
 from ai.training.devices import normalize_device
 from ai.training.validation import save_validated_profile
+from ai.training.personalization import fit_personalized
+from datetime import datetime, timezone
 
 PROFILES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "profiles")
 
@@ -68,14 +70,23 @@ def main():
         model = create_training_model(alphabet=alphabet, weights_path=base_weights, device=args.device)
     except (ImportError, ValueError) as error:
         p.error(str(error))
-    fit(model, samples, epochs=args.epochs, lr=args.lr, log_every=max(1, args.epochs // 20))
+    history, selection = fit_personalized(model, samples, epochs=args.epochs, lr=args.lr,
+                                         log_every=max(1, args.epochs // 20), fit_fn=fit)
 
     os.makedirs(args.profiles_dir, exist_ok=True)
     try:
-        save_validated_profile(model, out_path)
+        metadata = dict(selection, source_profile=args.base, learning_rate=args.lr,
+                        device=model.device, backend=getattr(model, 'backend', 'tensorflow'),
+                        num_samples=len(samples), created_at=datetime.now(timezone.utc).isoformat())
+        validation = save_validated_profile(model, out_path, samples=samples, metadata=metadata)
     except ValueError as error:
         p.error(str(error))
     logger.info('Training profile saved profile=%s path=%s', args.name, out_path)
+    if validation.get('style_warning'):
+        logger.warning(validation['style_warning'])
+    logger.info('Selected checkpoint epoch=%d of %d completed epochs evaluation=%s nll=%.4f',
+                selection['selected_epoch'], len(history), selection['validation_kind'],
+                selection['best_validation_loss'])
 
 
 if __name__ == "__main__":

@@ -131,6 +131,17 @@ class TrainingSpeedTests(unittest.TestCase):
             np.testing.assert_array_equal(loaded.gmm_w, actual.gmm_w.detach().numpy())
             np.testing.assert_array_equal(loaded.lstm1.kernel, actual.lstm1_k.detach().numpy())
 
+    def test_epoch_hook_can_stop_training_after_completed_epoch(self):
+        model = training.TorchHandwritingModel(device='cpu')
+        events = []
+        def completed(epoch, loss):
+            events.append((epoch, loss))
+            return epoch < 2
+        history = training.fit(model, self.samples()[:1], epochs=5, epoch_cb=completed)
+        self.assertEqual(len(history), 2)
+        self.assertEqual([epoch for epoch, _ in events], [1, 2])
+        self.assertTrue(np.isfinite(history).all())
+
 
 if __name__ == '__main__':
     unittest.main()

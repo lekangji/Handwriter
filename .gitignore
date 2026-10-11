@@ -22,6 +22,9 @@ htmlcov/
 /webapp/static/previews/
 /webapp/static/downloads/
 /samples/
+/profiles/*.style.json
+/profiles/*.training.json
+/profiles/.order.json
 
 # Operating system files
 .DS_Store

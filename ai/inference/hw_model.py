@@ -230,6 +230,10 @@ class HandwritingModel:
             prime_strokes = np.asarray(prime_strokes, dtype=np.float32)
             if prime_strokes.ndim != 2 or prime_strokes.shape[1] != 3 or not len(prime_strokes) or not np.isfinite(prime_strokes).all():
                 raise ValueError("Priming strokes must be a finite, nonempty N×3 array.")
+            if (not isinstance(prime_text, str) or not prime_text.strip()
+                    or any(c not in self.char_to_idx or c == '\0' for c in prime_text)
+                    or not np.isin(prime_strokes[:, 2], [0, 1]).all()):
+                raise ValueError('Priming requires a supported transcription and binary pen lifts.')
         full_text = (prime_text + " " + text) if prime_text else text
         onehot = self._encode_text(full_text)
         rng = np.random.default_rng(seed)
@@ -237,14 +241,15 @@ class HandwritingModel:
         if budget < 1:
             raise ValueError("Step budget must be positive.")
         for _ in range(attempts):
-            out, completed = self._sample_once(onehot, bias, rng, prime_strokes, budget, steps_per_char)
+            out, completed = self._sample_once(onehot, bias, rng, prime_strokes, budget, steps_per_char,
+                                               prefix_chars=len(prime_text) + 1 if prime_text else 0)
             width_per_char = float(out[:, 0].sum()) / len(text) if len(out) else 0
             if completed and np.isfinite(out).all() and 2 <= width_per_char <= 20:
                 out[-1, 2] = 1
                 return _split_missed_pen_lifts(out)
         raise GenerationError(f"Could not finish {text!r} reliably. Try a different seed, shorter chunks, or the default profile.")
 
-    def _sample_once(self, onehot, bias, rng, prime_strokes, max_steps, steps_per_char):
+    def _sample_once(self, onehot, bias, rng, prime_strokes, max_steps, steps_per_char, prefix_chars=0):
         h1 = c1 = h2 = c2 = h3 = c3 = np.zeros(LSTM_SIZE, dtype=np.float32)
         kappa = np.zeros(NUM_ATTN_MIX, dtype=np.float32)
         w = np.zeros(len(self.alphabet), dtype=np.float32)
@@ -266,14 +271,17 @@ class HandwritingModel:
 
         # Teacher-force the real sample before free-running on the target text.
         if prime_strokes is not None:
-            for point in prime_strokes:
+            # Captures start with an origin point; it is not a motion target.
+            for point in prime_strokes[1:]:
                 step(x)
                 x = point
 
         out = np.empty((max_steps, 3), dtype=np.float32)
         terminal_steps = 0
         attention_steps = np.zeros(len(onehot), dtype=np.int32)
-        for t in range(max_steps):
+        t = 0
+        transition_budget = max(200, min(2000, steps_per_char * prefix_chars)) if prefix_chars else 0
+        for _ in range(max_steps + transition_budget):
             phi = step(x)
             params = h3 @ self.gmm_w + self.gmm_b
             if not np.isfinite(params).all() or not np.isfinite(phi).all():
@@ -290,8 +298,7 @@ class HandwritingModel:
             dx = mus[k] + sigmas[k] * z1
             dy = mus[20 + k] + sigmas[20 + k] * (rhos[k] * z1 + np.sqrt(1 - rhos[k] ** 2) * z2)
             eos = float(rng.random() < float(_sigmoid(es[0])))
-            out[t] = (dx, dy, eos)
-            x = out[t]
+            x = np.array([dx, dy, eos], dtype=np.float32)
             # Final-character attention plus a pen lift matches the checkpoint.
             position = int(np.argmax(phi))
             attention_steps[position] += 1
@@ -299,12 +306,22 @@ class HandwritingModel:
             # Multiple attention components can switch peaks; reject prolonged dwell,
             # rather than treating every legitimate peak switch as skipped text.
             if attention_steps[position] > max(80, 2 * steps_per_char):
-                return out[:t + 1].copy(), False
+                return out[:t].copy(), False
+            # Free-running transition may still be finishing the primer. Never emit it.
+            if position < prefix_chars:
+                transition_budget -= 1
+                if transition_budget <= 0:
+                    return out[:t].copy(), False
+                continue
+            out[t] = x
+            t += 1
             at_end = position == len(onehot) - 1
             terminal_steps = terminal_steps + 1 if at_end else 0
             if at_end and (eos or terminal_steps >= 8):
-                return out[:t + 1].copy(), True
-        return out, False
+                return out[:t].copy(), True
+            if t >= max_steps:
+                break
+        return out[:t].copy(), False
 
 
 def align_baseline(coords: np.ndarray) -> np.ndarray:

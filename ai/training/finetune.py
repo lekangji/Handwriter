@@ -247,7 +247,7 @@ class TrainableHandwritingModel:
             json.dump(self.alphabet, f)
 
 
-def fit(model: TrainableHandwritingModel, samples, epochs=10, lr=1e-5, log_every=1, progress_cb=None, sample_progress_cb=None):
+def fit(model: TrainableHandwritingModel, samples, epochs=10, lr=1e-5, log_every=1, progress_cb=None, sample_progress_cb=None, epoch_cb=None):
     """samples: list of (offsets[T,3], text). Simple per-sample SGD (Adam),
     teacher-forced NLL — this is deliberately the minimal correct training
     loop, not a throughput-optimized one; a personal fine-tune is small data.
@@ -258,14 +258,14 @@ def fit(model: TrainableHandwritingModel, samples, epochs=10, lr=1e-5, log_every
     and completed epoch history, independently of the epoch callback."""
     if getattr(model, 'backend', None) == 'torch':
         from ai.training.torch_finetune import fit as torch_fit
-        return torch_fit(model, samples, epochs, lr, log_every, progress_cb, sample_progress_cb)
+        return torch_fit(model, samples, epochs, lr, log_every, progress_cb, sample_progress_cb, epoch_cb)
     if tf is None:
         raise ImportError("TensorFlow is required for fine-tuning.")
     with tf.device(getattr(model, "device", "/CPU:0")):
-        return _fit(model, samples, epochs, lr, log_every, progress_cb, sample_progress_cb)
+        return _fit(model, samples, epochs, lr, log_every, progress_cb, sample_progress_cb, epoch_cb)
 
 
-def _fit(model, samples, epochs, lr, log_every, progress_cb, sample_progress_cb=None):
+def _fit(model, samples, epochs, lr, log_every, progress_cb, sample_progress_cb=None, epoch_cb=None):
     if not samples:
         raise ValueError("No usable handwriting samples.")
     if epochs < 1 or log_every < 1 or not np.isfinite(lr) or lr <= 0:
@@ -307,5 +307,7 @@ def _fit(model, samples, epochs, lr, log_every, progress_cb, sample_progress_cb=
             if progress_cb:
                 progress_cb(epoch, epochs, epoch_loss, elapsed, eta)
             training_log.epoch(epoch, epoch_loss, elapsed, eta)
+            if epoch_cb is not None and epoch_cb(epoch + 1, epoch_loss) is False:
+                break
         training_log.finish(history, time.monotonic() - t_start)
     return history

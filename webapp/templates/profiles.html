@@ -2,7 +2,7 @@
 {% block title %}Profiles — AI Handwriter{% endblock %}
 {% block content %}
 <h1>Profiles</h1>
-<p class="sub">View your saved handwriting profiles. Rename a profile or delete one you no longer use.</p>
+<p class="sub">Inspect each model's alphabet and training details. Reorder your profiles with the arrows; default always stays first.</p>
 {% if error %}<p class="warn" role="alert">{{ error }}</p>{% endif %}
 <div class="profile-list">
   {% for p in profiles %}
@@ -10,9 +10,40 @@
     <div>
       <h2 id="profile-{{ loop.index }}">{{ p }}</h2>
       {% if p == 'default' %}<p class="hint">Built-in profile. Kept as the starting point for training.</p>{% endif %}
+      {% set info = details[p] %}
+      <details class="profile-details">
+        <summary>Model details · {{ info.alphabet_size }} supported characters</summary>
+        <p class="hint">This model writes character sequences. It has an alphabet rather than a fixed vocabulary of words.</p>
+        {% if info.error %}<p class="warn">{{ info.error }}</p>{% endif %}
+        <h3>Supported characters</h3>
+        <div class="alphabet-chips" aria-label="Supported characters for {{ p }}">
+          {% for char in info.alphabet %}<code>{{ 'space' if char == ' ' else char }}</code>{% endfor %}
+        </div>
+        <table class="kv">
+          <tr><td>Model</td><td>3-layer LSTM · stroke generation</td></tr>
+          <tr><td>Weights</td><td>{{ info.size_mb }} MB</td></tr>
+          <tr><td>Style priming</td><td>{{ info.style_samples }} saved sample{{ '' if info.style_samples == 1 else 's' }}</td></tr>
+          <tr><td>Missing uppercase letters</td><td>{{ info.missing_uppercase|join(', ') if info.missing_uppercase else 'None' }}</td></tr>
+          {% if info.training %}
+          <tr><td>Starting profile</td><td>{{ info.training.get('source_profile', 'Not recorded') }}</td></tr>
+          <tr><td>Selected checkpoint</td><td>{{ 'Source model (epoch 0)' if info.training.get('selected_epoch') == 0 else 'Epoch ' ~ info.training.get('selected_epoch', 'Not recorded') }}</td></tr>
+          <tr><td>Completed / requested epochs</td><td>{{ info.training.get('completed_epochs', '—') }} / {{ info.training.get('requested_epochs', '—') }}</td></tr>
+          <tr><td>Evaluation</td><td>{{ 'Held-out phrases' if info.training.get('validation_kind') == 'held_out' else 'Training samples (small dataset)' }}</td></tr>
+          <tr><td>Best evaluation NLL</td><td>{{ info.training.get('best_validation_loss', 'Not recorded') }}</td></tr>
+          <tr><td>Training device</td><td>{{ info.training.get('device', 'Not recorded') }}</td></tr>
+          <tr><td>Created</td><td>{{ info.training.get('created_at', 'Not recorded') }}</td></tr>
+          {% else %}<tr><td>Training details</td><td>Not recorded for this profile</td></tr>{% endif %}
+        </table>
+        {% if info.training.get('style_warning') %}<p class="warn">{{ info.training.style_warning }}</p>{% endif %}
+      </details>
     </div>
     {% if p != 'default' %}
     <div class="profile-actions">
+      <form method="post" action="{{ url_for('profiles_page') }}" class="profile-order">
+        <input type="hidden" name="profile" value="{{ p }}">
+        <button class="secondary" type="submit" name="action" value="move_up" aria-label="Move {{ p }} up" {{ 'disabled' if loop.index0 == (1 if 'default' in profiles else 0) else '' }}>↑</button>
+        <button class="secondary" type="submit" name="action" value="move_down" aria-label="Move {{ p }} down" {{ 'disabled' if loop.last else '' }}>↓</button>
+      </form>
       <form method="post" action="{{ url_for('profiles_page') }}" class="profile-rename">
         <input type="hidden" name="profile" value="{{ p }}">
         <input type="hidden" name="action" value="rename">

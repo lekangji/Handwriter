@@ -32,11 +32,17 @@
           <input type="number" id="seed" name="seed" value="{{ form.seed }}">
           <p class="hint">Same seed + text = same handwriting every time.</p>
         </div>
+        <div>
+          <label for="generation_device">Generation device</label>
+          <input id="generation_device" name="generation_device" value="{{ form.generation_device }}" list="generationDevices" required pattern="auto|cpu|cuda(:[0-9]+)?">
+          <datalist id="generationDevices"><option value="auto"><option value="cpu"><option value="cuda"><option value="cuda:0"><option value="cuda:1"></datalist>
+          <p class="hint">Auto uses an available NVIDIA GPU. Choose CPU or a visible GPU such as cuda:1.</p>
+        </div>
       </div>
 
       <details id="modelSetup">
         <summary>Fine-tune the feel</summary>
-        <p class="hint">Shorter chunks help attention stay on track. More retries or steps take longer.</p>
+        <p class="hint">Shorter chunks help attention stay on track. Long words are divided automatically, preserving their text. More retries or steps take longer.</p>
         <div class="field-grid">
           <div><label for="chunk_chars">Chunk length (characters)</label><input id="chunk_chars" name="chunk_chars" type="number" min="12" max="48" value="{{ form.chunk_chars }}"></div>
           <div><label for="attempts">Maximum attempts</label><input id="attempts" name="attempts" type="number" min="1" max="5" value="{{ form.attempts }}"></div>
@@ -122,7 +128,7 @@
     target.replaceChildren();
     document.getElementById('previewEmpty').hidden = true;
     target.hidden = false;
-    document.getElementById('pageCount').textContent = `${result.num_pages} page${result.num_pages === 1 ? '' : 's'} · ${result.gen_seconds}s`;
+    document.getElementById('pageCount').textContent = `${result.num_pages} page${result.num_pages === 1 ? '' : 's'} · ${result.gen_seconds}s · ${result.generation_device_name || result.generation_device || 'CPU'}${result.style_primed ? ' · sample style' : ''}`;
     const links = document.createElement('div'); links.className = 'downloads';
     function download(url, label, primary = false) {
       const a = document.createElement('a'); a.href = url; a.textContent = label; a.download = '';

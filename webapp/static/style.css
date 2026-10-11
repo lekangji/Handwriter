@@ -76,6 +76,12 @@ progress::-moz-progress-bar { background: var(--accent); }
 .result-card { margin-top: 24px; }
 .profile-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 24px 0; border-bottom: 1px solid var(--line); }
 .profile-row h2 { overflow-wrap: anywhere; }
+.profile-row > div:first-child { flex: 1; min-width: 0; }
+.profile-details { max-width: 680px; }
+.alphabet-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0; }
+.alphabet-chips code { padding: 4px 7px; border: 1px solid var(--line); border-radius: 4px; }
+.profile-order { display: flex; gap: 6px; }
+.profile-actions { flex-wrap: wrap; }
 .profile-actions, .profile-controls { display: flex; align-items: end; gap: 12px; }
 .profile-rename label { margin-top: 0; }
 .profile-controls input { min-width: 0; }

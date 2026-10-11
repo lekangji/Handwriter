@@ -104,6 +104,18 @@ class PersonalizationTests(unittest.TestCase):
         self.assertTrue(np.isfinite(history).all())
         self.assertTrue(all(np.isfinite(variable.numpy()).all() for variable in model.trainable_variables))
 
+    @unittest.skipIf(finetune.tf is None, 'TensorFlow is not installed')
+    def test_tensorflow_epoch_hook_stops_after_completed_epoch(self):
+        model = finetune.TrainableHandwritingModel(device='cpu')
+        events = []
+        def completed(epoch, loss):
+            events.append(epoch)
+            return False
+        data = [(np.array([[0, 0, 0], [1, 1, 1]], np.float32), 'a')]
+        history = finetune.fit(model, data, epochs=3, epoch_cb=completed)
+        self.assertEqual(len(history), 1)
+        self.assertEqual(events, [1])
+
     def train_and_export_on_device(self, device):
         from ai.inference.hw_model import HandwritingModel
         model = finetune.TrainableHandwritingModel(device=device)

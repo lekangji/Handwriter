@@ -27,11 +27,16 @@ import math
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import uuid
+from datetime import datetime, timezone
 
 from flask import Flask, render_template, request, send_file, url_for, jsonify, redirect
 
 from ai.logging_utils import configure_logging
 from ai.training.validation import save_validated_profile
+from ai.profiles import ordered_profiles, save_order, move_profile, describe_profile, SIDECARS
+from ai.inference.runtime import create_model, resolve_device, normalize_device as normalize_generation_device
+from ai.training.samples import load_profile_alphabet
+from ai.training.style import load_style
 
 configure_logging()
 logger = logging.getLogger('ai.web')
@@ -55,7 +60,7 @@ app = Flask(__name__, template_folder=os.path.join(WEBAPP_DIR, "templates"),
             static_folder=os.path.join(WEBAPP_DIR, "static"), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 
-_MODEL_CACHE = {}  # profile_name -> HandwritingModel (weight loading is the slow part; cache it)
+_MODEL_CACHE = {}  # (profile_name, resolved_device) -> inference model
 _JOBS = {}
 _JOB_LOCK = threading.Lock()
 _WORKER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="handwriter")
@@ -125,9 +130,13 @@ def _cleanup_old_outputs():
 
 
 def list_profiles():
-    names = sorted(os.path.splitext(os.path.basename(p))[0]
-                    for p in glob.glob(os.path.join(PROFILES_DIR, "*.npz")))
-    return names
+    return ordered_profiles(PROFILES_DIR)
+
+
+def _invalidate_model(name):
+    for key in list(_MODEL_CACHE):
+        if key == name or (isinstance(key, tuple) and key[0] == name):
+            del _MODEL_CACHE[key]
 
 
 def validate_profile_name(name):
@@ -149,54 +158,67 @@ def profiles_page():
                 if name == "default":
                     raise ValueError("The default profile cannot be renamed or deleted.")
                 weights = os.path.join(PROFILES_DIR, f"{name}.npz")
-                alphabet = os.path.join(PROFILES_DIR, f"{name}.alphabet.json")
                 action = request.form.get("action")
+                previous_order = list_profiles()
+                has_order = os.path.exists(os.path.join(PROFILES_DIR, '.order.json'))
                 if action == "rename":
                     new_name = request.form.get("profile_name", "").strip()
                     validate_profile_name(new_name)
                     if new_name == "default" or new_name in list_profiles():
                         raise ValueError("Choose a new name that is not already in use.")
                     new_weights = os.path.join(PROFILES_DIR, f"{new_name}.npz")
-                    new_alphabet = os.path.join(PROFILES_DIR, f"{new_name}.alphabet.json")
-                    if os.path.exists(new_alphabet):
-                        raise ValueError("That name already has a saved alphabet. Choose another name.")
-                    has_alphabet = os.path.exists(alphabet)
-                    if has_alphabet:
-                        os.rename(alphabet, new_alphabet)
+                    pairs = [(os.path.join(PROFILES_DIR, name + suffix),
+                              os.path.join(PROFILES_DIR, new_name + suffix)) for suffix in SIDECARS]
+                    if any(os.path.exists(target) for _, target in pairs):
+                        raise ValueError("That name already has saved profile data. Choose another name.")
+                    moved = []
                     try:
+                        for source, target in pairs:
+                            if os.path.exists(source):
+                                os.rename(source, target)
+                                moved.append((source, target))
                         os.rename(weights, new_weights)
                     except OSError:
-                        if has_alphabet:
-                            os.rename(new_alphabet, alphabet)
+                        for source, target in reversed(moved):
+                            os.rename(target, source)
                         raise
+                    if has_order:
+                        save_order(PROFILES_DIR, [new_name if p == name else p for p in previous_order])
                 elif action == "delete":
                     os.remove(weights)
-                    _MODEL_CACHE.pop(name, None)
-                    if os.path.exists(alphabet):
-                        os.remove(alphabet)
+                    for suffix in SIDECARS:
+                        sidecar = os.path.join(PROFILES_DIR, name + suffix)
+                        if os.path.exists(sidecar):
+                            os.remove(sidecar)
+                    if has_order:
+                        save_order(PROFILES_DIR, [p for p in previous_order if p != name])
+                elif action in ('move_up', 'move_down'):
+                    move_profile(PROFILES_DIR, name, -1 if action == 'move_up' else 1)
                 else:
-                    raise ValueError("Choose Rename or Delete.")
-                _MODEL_CACHE.pop(name, None)
+                    raise ValueError("Choose Rename, Delete, or a reorder direction.")
+                _invalidate_model(name)
             return redirect(url_for("profiles_page"))
         except ValueError as exc:
             error = str(exc)
         except OSError:
             error = "Could not update the profile files. Check file permissions and refresh the profile list before trying again."
-    return render_template("profiles.html", profiles=list_profiles(), error=error), 400 if error else 200
+    names = list_profiles()
+    details = {name: describe_profile(PROFILES_DIR, name) for name in names}
+    return render_template("profiles.html", profiles=names, details=details, error=error), 400 if error else 200
 
 
-def get_model(profile_name: str) -> HandwritingModel:
+def get_model(profile_name: str, device='auto') -> HandwritingModel:
     if profile_name not in list_profiles():
         raise ValueError("Choose an existing handwriting profile.")
-    if profile_name not in _MODEL_CACHE:
+    device = resolve_device(device)
+    key = (profile_name, device)
+    if key not in _MODEL_CACHE:
         weights_path = os.path.join(PROFILES_DIR, f"{profile_name}.npz")
-        alphabet_path = os.path.join(PROFILES_DIR, f"{profile_name}.alphabet.json")
-        alphabet = None
-        if os.path.exists(alphabet_path):
-            with open(alphabet_path, encoding="utf-8") as stream:
-                alphabet = json.load(stream)
-        _MODEL_CACHE[profile_name] = HandwritingModel(weights_path=weights_path, alphabet=alphabet)
-    return _MODEL_CACHE[profile_name]
+        alphabet = load_profile_alphabet(weights_path)
+        model = create_model(weights_path, alphabet, device=device)
+        model.style_samples = load_style(weights_path, alphabet)
+        _MODEL_CACHE[key] = model
+    return _MODEL_CACHE[key]
 
 
 def form_float(name, default, low=None, high=None):
@@ -224,6 +246,7 @@ DEFAULT_FORM = {
     "handwriting_size_mm": 6, "bias": 1.5, "seed": 7,
     "chunk_chars": 20, "attempts": 3, "steps_per_char": 50,
     "letter_spacing": 1, "word_spacing": 1, "slant": 0,
+    "generation_device": "auto",
     "bed_width_mm": 220, "bed_height_mm": 220,
     "paper_origin_x_mm": 10, "paper_origin_y_mm": 10,
     "pen_up_z_mm": 5, "pen_down_z_mm": 0,
@@ -245,6 +268,7 @@ def generate():
         profile = request.form.get("profile", "default")
         if profile not in list_profiles():
             raise ValueError("Choose an existing handwriting profile.")
+        device = normalize_generation_device(request.form.get('generation_device', 'auto'))
         page = PageTemplate(
             width_mm=form_float("page_width_mm", 210, 20, 1000),
             height_mm=form_float("page_height_mm", 297, 20, 1000),
@@ -278,7 +302,10 @@ def generate():
         )
         def work(job_id, update):
             _cleanup_old_outputs()
-            model = get_model(profile)
+            model = get_model(profile, device=device)
+            update(device=getattr(model, 'device', 'cpu'), device_name=getattr(model, 'device_name', 'CPU'))
+            style_samples = getattr(model, 'style_samples', [])
+            prime_strokes, prime_text = style_samples[0] if style_samples else (None, None)
             normalized = "\n".join(sanitize_line(line, set(model.alphabet)) for line in text.splitlines())
             warnings = []
             if normalized != text:
@@ -290,7 +317,8 @@ def generate():
                 elapsed = time.monotonic() - started
                 update(status="generating", progress=round(done / total * 90), completed=done, total=total,
                        eta_s=round(elapsed / done * (total - done), 1))
-            doc = generate_document(normalized, model, page, progress_cb=progress, **options)
+            doc = generate_document(normalized, model, page, progress_cb=progress,
+                                    prime_strokes=prime_strokes, prime_text=prime_text, **options)
             update(status="rendering", progress=92)
             directory = os.path.join(PREVIEWS_DIR, job_id)
             os.makedirs(directory, exist_ok=True)
@@ -311,7 +339,10 @@ def generate():
                     "png_urls": [f"/static/previews/{job_id}/{os.path.basename(path)}" for path in png_paths],
                     "gcode_url": gcode_url, "gcode_error": gcode_error,
                     "margin_warnings": sum(i.kind == "outside_margin" for i in issues),
-                    "warnings": warnings, "normalized_text": normalized}
+                    "warnings": warnings, "normalized_text": normalized,
+                    "generation_device": getattr(model, 'device', 'cpu'),
+                    "generation_device_name": getattr(model, 'device_name', 'CPU'),
+                    "style_primed": bool(style_samples)}
         job_id = _start_job("generation", work)
         return jsonify(job_id=job_id, progress_url=f"/jobs/{job_id}"), 202
     except ValueError as error:
@@ -384,6 +415,7 @@ def train_run():
                         'samples=%d epochs=%d lr=%g alphabet=%d',
                         job_id, profile_name, base_profile, device, len(samples), epochs, lr, len(alphabet))
             from ai.training.finetune import create_training_model, fit
+            from ai.training.personalization import fit_personalized
             model = create_training_model(alphabet=alphabet, weights_path=base_weights, device=device)
             update(device=model.device, backend=getattr(model, 'backend', 'tensorflow'),
                    device_name=getattr(model, 'device_name', model.device),
@@ -391,18 +423,24 @@ def train_run():
             started = time.monotonic()
             def progress(metrics):
                 update(status="training", **metrics)
-            history = fit(model, samples, epochs=epochs, lr=lr, sample_progress_cb=progress)
+            history, selection = fit_personalized(model, samples, epochs=epochs, lr=lr,
+                                                 sample_progress_cb=progress, fit_fn=fit)
             output_path = os.path.join(PROFILES_DIR, f"{profile_name}.npz")
             logger.debug('Saving training profile job=%s path=%s', job_id, output_path)
             update(status="validating", progress=97)
-            validation = save_validated_profile(model, output_path)
+            metadata = dict(selection, source_profile=base_profile, learning_rate=lr,
+                            device=model.device, backend=getattr(model, 'backend', 'tensorflow'),
+                            num_samples=len(samples), created_at=datetime.now(timezone.utc).isoformat())
+            validation = save_validated_profile(model, output_path, samples=samples, metadata=metadata)
             logger.info('Training profile saved job=%s profile=%s path=%s', job_id, profile_name, output_path)
-            _MODEL_CACHE.pop(profile_name, None)
-            return {"profile_name": profile_name, "num_samples": len(samples), "epochs": epochs, "device": model.device,
+            _invalidate_model(profile_name)
+            return {"profile_name": profile_name, "num_samples": len(samples), "epochs": len(history), "device": model.device,
                     "train_seconds": round(time.monotonic() - started, 1), "loss_start": round(history[0], 3),
                     "loss_end": round(history[-1], 3), "alphabet_size": len(alphabet),
                     "new_chars": [c for c in alphabet if c not in base_alphabet], "profiles": list_profiles(),
-                    "generation_checks_passed": validation['passed']}
+                    "generation_checks_passed": validation['passed'],
+                    "style_samples_retained": validation.get('style_samples_retained', 0),
+                    "style_warning": validation.get('style_warning'), **selection}
         job_id = _start_job("training", work)
         return jsonify(job_id=job_id, progress_url=f"/jobs/{job_id}"), 202
     except (ValueError, TypeError, KeyError) as error:

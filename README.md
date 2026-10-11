@@ -27,9 +27,13 @@ Open http://127.0.0.1:5000. The Flask entry point stays at the project root; web
 
 Paste text, choose a profile, and select **Create handwriting**. Generation starts in a background worker; the page stays usable and reports line progress and an estimated remaining time. Reloading reconnects to a running job while the server remains running.
 
+**Generation device** accepts `auto`, `cpu`, `cuda`, or `cuda:N`. Auto prefers available PyTorch CUDA; CPU retains NumPy inference. Explicit CUDA requests report an error when the requested GPU is unavailable. CUDA uses the same NPZ profiles, keeps recurrent state and weights on the GPU, and replays cached CUDA graphs in blocks of 32 points. New sequence lengths/settings take extra time to prepare; subsequent draws reuse those graphs. The result shows the actual device used. Seeds are repeatable within a backend; CPU and CUDA can produce different stochastic draws.
+
 Neatness controls output variance. **Fine-tune the feel** exposes chunk length, retry count, steps per character, letter width, gaps between chunks, and slant. Page setup controls physical letter size, ruling, margins, and paragraph spacing. Short chunks reduce attention drift; more retries and steps cost time. Physical line length follows usable paper width and letter width, without a fixed character cap. Multi-page documents join independent short chunks within each physical line. The generator rejects incomplete or runaway draws rather than returning rejected strokes. Failed multi-word chunks fall back to independent words, without restarting completed pages. Sample checks do not import TensorFlow; training preparation runs in the worker.
 
 Unsupported characters are replaced or removed using the profile alphabet. The result shows a warning and the exact normalized text. Default weights lack uppercase Q, X, and Z; those fall back to lowercase. Inspect every preview: attention and geometry checks do not perform handwriting recognition and cannot guarantee exact transcription.
+
+Words longer than the configured chunk length are split automatically, preferably at existing hyphens. Fragments preserve every supported character and use a small intra-word gap rather than adding a word space. If a draw fails, only that chunk is retried as words or smaller fragments; a fragment that still fails down to a single character reports a generation error. This recovery does not change your text or export rejected strokes.
 
 Printer and paper coordinates still need calibration. SVG, PNG, and G-code use the same stroke geometry. Unsafe paper or printer coordinates block G-code export; previews remain available. A4 paper is taller than a default 220 mm printer bed, so full-page G-code may require a larger bed or smaller paper. The printer pauses between pages for manual paper changes.
 
@@ -42,6 +46,14 @@ Printer and paper coordinates still need calibration. SVG, PNG, and G-code use t
 Capture converts browser y-down positions into the model's y-up offsets, preserves pen lifts and dots, and resamples by distance in calibrated model units. Merged sessions retain their physical scale. The training graph uses a dynamic TensorFlow loop, validates finite losses and gradients, and defaults to a conservative learning rate of `0.00001`. More epochs on very few samples can overfit; add varied clear phrases rather than simply increasing epochs.
 
 Before a new profile is saved, its exported weights must complete four deterministic generation checks using the normal inference limits. Failed profiles are discarded with an error even if training NLL improved. These are basic generation checks, not a test of readability or personal style; inspect generated phrases you did not capture. Existing profiles are preserved.
+
+Personalization now evaluates the source model and each improving epoch and restores the lowest-evaluation-NLL checkpoint that passes those generation checks. When at least five distinct phrases permit it, roughly 20% of transcription groups are held out; repeated copies of a phrase stay together and every captured character retains a training example. Smaller datasets, or datasets without a suitable holdout, use evaluation on training samples and label it explicitly. Training stops after three epochs without an eligible improvement. **Maximum epochs** is an upper limit; the result reports completed epochs, selected checkpoint (epoch 0 means the source model), evaluation kind and best NLL. Neither NLL nor these checks measures readability or style fidelity.
+
+New profiles retain up to three compatible short captures as model-space offsets in `<name>.style.json`; generation primes its recurrent state with the first saved sample and emits only target strokes. `<name>.training.json` records checkpoint selection and training details. Older profiles remain usable without either sidecar; retrain under a new name to retain captures for priming. Keep all sidecars together when copying profiles between machines. They contain personal handwriting samples and should be treated as part of your profile data.
+
+On **Profiles**, expand **Model details** to inspect the supported alphabet, missing capitals, retained style samples and recorded training details. This is a character model; it has no fixed word vocabulary. Default stays first in all lists. The arrow buttons persist the order of personal profiles in `profiles/.order.json`. Rename and delete also handle style/training sidecars and preserve the remaining order.
+
+Retained style samples must also pass primed generation checks before they are enabled. If none passes, the working weights are saved without style priming and the training result explains why. This protects an otherwise usable profile from an incompatible capture; the checks still do not verify handwriting recognition.
 
 Web training permits up to 800 sample-epochs. For larger datasets:
 
@@ -98,6 +110,14 @@ python tests/benchmark_training.py --device cpu
 ```
 
 The benchmark uses synthetic 128- and 512-point samples, five warmup steps and the median of five full training steps (forward, backward, gradient clipping and Adam). It reports first-step time separately because TorchScript startup can affect short runs. Results depend on hardware and sample lengths.
+
+Compare CPU and CUDA document generation, including automatic long-word splitting:
+
+```powershell
+python tests/benchmark_generation.py --device cuda --repeats 3
+```
+
+This benchmark excludes weight loading, rendering and export, reports cold and warmed timings separately, and does not save profiles. On the development RTX 3060, the three-line fixture took a warmed median of 0.217 seconds on CUDA versus 0.471 seconds on NumPy CPU (about 2.17× faster). The first CUDA draw took 2.480 seconds versus 0.488 seconds on CPU because of graph preparation. These are one local measurement with one CPU thread, not a guarantee for other documents or hardware; the backends also generated different point counts (1244 versus 1278).
 
 TensorFlow tests skip when TensorFlow is unavailable. Flask and rendering dependencies are needed for web tests. No packages are downloaded by the tests.
 

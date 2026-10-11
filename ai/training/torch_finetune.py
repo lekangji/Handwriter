@@ -138,7 +138,7 @@ class TorchHandwritingModel(torch.nn.Module):
             json.dump(self.alphabet, stream)
 
 
-def fit(model, samples, epochs=10, lr=1e-5, log_every=1, progress_cb=None, sample_progress_cb=None):
+def fit(model, samples, epochs=10, lr=1e-5, log_every=1, progress_cb=None, sample_progress_cb=None, epoch_cb=None):
     if not samples:
         raise ValueError('No usable handwriting samples.')
     if epochs < 1 or log_every < 1 or not np.isfinite(lr) or lr <= 0:
@@ -181,5 +181,7 @@ def fit(model, samples, epochs=10, lr=1e-5, log_every=1, progress_cb=None, sampl
             if progress_cb:
                 progress_cb(epoch, epochs, epoch_loss, elapsed, eta)
             training_log.epoch(epoch, epoch_loss, elapsed, eta)
+            if epoch_cb is not None and epoch_cb(epoch + 1, epoch_loss) is False:
+                break
         training_log.finish(history, time.monotonic() - started)
     return history

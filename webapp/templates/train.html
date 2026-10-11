@@ -38,9 +38,9 @@
           <p class="hint">Start with default when rebuilding a profile made before the capture fixes.</p>
         </div>
         <div>
-          <label for="epochs">Epochs</label>
+          <label for="epochs">Maximum epochs</label>
           <input type="number" id="epochs" name="epochs" value="10" min="1" max="40">
-          <p class="hint">More epochs = closer fit to your samples, but slower and more prone to overfitting on small datasets.</p>
+          <p class="hint">The best working checkpoint is kept automatically. Training stops after three epochs without improvement.</p>
         </div>
         <div>
           <label for="learning_rate">Learning rate</label>
@@ -82,6 +82,7 @@
         <tr><td>Device / backend</td><td id="liveDevice"></td></tr>
         <tr><td>Starting profile / learning rate</td><td id="liveBase"></td></tr>
         <tr><td>Completed epoch NLL</td><td id="liveHistory"></td></tr>
+        <tr><td>Best checkpoint / evaluation NLL</td><td id="liveCheckpoint"></td></tr>
       </table>
     </div>
     <div id="resultEmpty" class="empty-state">Training log and the resulting profile will appear here.</div>
@@ -93,12 +94,16 @@
         <tr><td>Training time</td><td id="rTime"></td></tr>
         <tr><td>Training device</td><td id="rDevice"></td></tr>
         <tr><td>Loss (start → end)</td><td id="rLoss"></td></tr>
+        <tr><td>Selected checkpoint</td><td id="rCheckpoint"></td></tr>
+        <tr><td>Evaluation</td><td id="rValidation"></td></tr>
+        <tr><td>Style samples retained</td><td id="rStyle"></td></tr>
         <tr><td>Basic generation checks</td><td id="rChecks"></td></tr>
         <tr><td>Alphabet size</td><td id="rAlphaSize"></td></tr>
         <tr id="rNewCharsRow" style="display:none"><td>New characters added</td><td id="rNewChars"></td></tr>
       </table>
-      <p class="hint">Lower training loss means better predictions on your samples, not necessarily better generated handwriting.
-        Profiles must pass basic generation checks before saving. Preview unseen phrases to check readability and your style.</p>
+      <p class="warn" id="rStyleWarning" style="display:none"></p>
+      <p class="hint">The selected checkpoint has the best evaluation loss among checkpoints that passed generation checks.
+        Small datasets are evaluated on training samples; this does not measure generalization. Captured samples are saved for style priming. Preview unseen phrases to check readability and your style.</p>
       <a class="primary" href="{{ url_for('write_page') }}">Go write something with it →</a>
     </div>
     <div id="resultError" role="alert" class="warn" style="display:none"></div>
@@ -146,6 +151,11 @@ function showLog(log) {
   document.getElementById('rTime').textContent = log.train_seconds + 's';
   document.getElementById('rDevice').textContent = log.device || 'auto';
   document.getElementById('rLoss').textContent = `${log.loss_start} → ${log.loss_end}`;
+  document.getElementById('rCheckpoint').textContent = log.selected_epoch === 0 ? 'Source model (epoch 0)' : `Epoch ${log.selected_epoch ?? '—'}${log.early_stopped ? ' · stopped early' : ''}`;
+  document.getElementById('rValidation').textContent = `${log.validation_kind === 'held_out' ? 'Held-out phrases' : 'Training samples (small dataset)'} · NLL ${metric(log.best_validation_loss, 4)}`;
+  document.getElementById('rStyle').textContent = log.style_samples_retained ?? 'Not recorded';
+  document.getElementById('rStyleWarning').textContent = log.style_warning || '';
+  document.getElementById('rStyleWarning').style.display = log.style_warning ? '' : 'none';
   document.getElementById('rChecks').textContent = log.generation_checks_passed == null
     ? 'Not recorded' : `${log.generation_checks_passed} passed`;
   document.getElementById('rAlphaSize').textContent = log.alphabet_size;
@@ -172,6 +182,7 @@ function renderTrainingProgress(job) {
       liveDevice: `${job.device_name || job.device || 'auto'} · ${job.device || 'auto'} · ${job.backend || '—'}`,
       liveBase: `${job.base_profile || '—'} · ${job.learning_rate == null ? '—' : job.learning_rate}`,
       liveHistory: (job.loss_history || []).map((loss, i) => `${i + 1}: ${metric(loss, 4)}`).join(' · ') || 'No completed epochs yet',
+      liveCheckpoint: `${job.selected_epoch === 0 ? 'Source model' : job.selected_epoch == null ? 'Checking…' : 'Epoch ' + job.selected_epoch} · ${metric(job.best_validation_loss, 4)}`,
     };
     for (const [id, value] of Object.entries(values)) document.getElementById(id).textContent = value;
   } else {

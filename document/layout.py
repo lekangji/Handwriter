@@ -11,6 +11,7 @@ Page coordinate convention used throughout this file and gcode.py:
   (ordinary document/reading order), units = millimeters.
 """
 from dataclasses import dataclass, field
+from collections import deque
 from typing import List
 import numpy as np
 
@@ -86,6 +87,41 @@ def wrap_text(text: str, page: "PageTemplate", letter_spacing=1.0) -> List[dict]
     return out
 
 
+def _split_token(text, limit):
+    """Preserve a token exactly, preferring an existing hyphen as a seam."""
+    pieces = []
+    while len(text) > limit:
+        end = text.rfind('-', 1, limit)
+        end = end + 1 if end >= 1 else limit
+        pieces.append(text[:end])
+        text = text[end:]
+    if text:
+        pieces.append(text)
+    return pieces
+
+
+def _generation_chunks(text, limit):
+    # Each entry records the gap BEFORE it: full word gap or a small intra-word seam.
+    chunks, current = [], ''
+    for word in text.split():
+        if len(word) > limit:
+            if current:
+                chunks.append((current, 1.0))
+                current = ''
+            chunks.extend((piece, 1.0 if i == 0 else 0.15)
+                          for i, piece in enumerate(_split_token(word, limit)))
+        else:
+            candidate = (current + ' ' + word).strip()
+            if len(candidate) > limit and current:
+                chunks.append((current, 1.0))
+                current = word
+            else:
+                current = candidate
+    if current:
+        chunks.append((current, 1.0))
+    return deque(chunks)
+
+
 def generate_document(text: str, model: HandwritingModel, page: "PageTemplate",
                        seed: int = None, prime_strokes=None, prime_text=None,
                        bias: float = 1.0, progress_cb=None, chunk_chars=20,
@@ -122,39 +158,31 @@ def generate_document(text: str, model: HandwritingModel, page: "PageTemplate",
         line_text = sanitize_line(entry['text'], valid_chars=set(model.alphabet))
         if line_text.strip():
             line_seed = None if seed is None else int(rng.integers(0, 2**31 - 1))
-            chunks = []
-            current = ''
-            for word in line_text.split():
-                if len(word) > chunk_chars:
-                    raise ValueError(f"Word {word!r} exceeds the chunk limit. Increase chunk length or shorten it.")
-                candidate = (current + ' ' + word).strip()
-                if len(candidate) > chunk_chars and current:
-                    chunks.append(current)
-                    current = word
-                else:
-                    current = candidate
-            if current:
-                chunks.append(current)
+            chunks = _generation_chunks(line_text, chunk_chars)
             draws, cursor = [], 0.0
             while chunks:
-                chunk = chunks.pop(0)
+                chunk, gap = chunks.popleft()
                 try:
                     offsets = model.sample(chunk, bias=bias, seed=line_seed,
                                            prime_strokes=prime_strokes, prime_text=prime_text,
                                            attempts=attempts, steps_per_char=steps_per_char)
                 except GenerationError:
                     words = chunk.split()
-                    if len(words) == 1:
+                    if len(chunk) == 1:
                         raise
-                    # Retry only the failed chunk word by word, never the whole page.
-                    chunks[:0] = words
+                    # Subdivide only rejected text. Every fallback is strictly shorter.
+                    pieces = words if len(words) > 1 else _split_token(chunk, max(1, len(chunk) // 2))
+                    fallback = [(piece, gap if i == 0 else (1.0 if len(words) > 1 else 0.15))
+                                for i, piece in enumerate(pieces)]
+                    chunks.extendleft(reversed(fallback))
+                    line_seed = None if seed is None else int(rng.integers(0, 2**31 - 1))
                     continue
                 chunk_coords = align_baseline(offsets_to_coords(offsets))
                 chunk_coords[:, 0] -= chunk_coords[:, 0].min()
-                chunk_coords[:, 0] += cursor
+                chunk_coords[:, 0] += cursor + (AVG_MODEL_UNITS_PER_CHAR * word_spacing * gap if draws else 0)
                 chunk_coords[-1, 2] = 1
                 draws.append(chunk_coords)
-                cursor = float(chunk_coords[:, 0].max()) + AVG_MODEL_UNITS_PER_CHAR * word_spacing
+                cursor = float(chunk_coords[:, 0].max())
                 line_seed = None if seed is None else int(rng.integers(0, 2**31 - 1))
             coords = np.concatenate(draws)
             coords[:, 0] = coords[:, 0] * letter_spacing + coords[:, 1] * np.tan(np.deg2rad(slant))
