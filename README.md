@@ -55,6 +55,8 @@ A grown source profile keeps its alphabet order; new characters are appended onc
 
 Training defaults to `auto`: PyTorch CUDA when available (including native Windows), otherwise TensorFlow GPU/CPU. Set **Training device** on Personalize or pass `--device cpu`, `--device cuda`, or `--device cuda:1` to the CLI. Explicit CUDA requests fail with setup instructions when the requested GPU is unavailable. The selected device appears in progress and results. Both training backends export the same NPZ profiles for NumPy inference.
 
+PyTorch computes the output head and density loss for all pen points in a sample together, reducing repeated small operations. Recurrent state, sample order, float32 precision, per-sample Adam updates, and validation remain the same. Losses and weights can differ by normal float32 rounding.
+
 For NVIDIA CUDA training on Windows, Linux, or WSL2, install CUDA-enabled PyTorch in the same environment used to run the app. A compatible NVIDIA driver is required; see the [PyTorch installation guide](https://pytorch.org/get-started/locally/). From your activated environment:
 
 ```bash
@@ -78,6 +80,8 @@ Successful job polling and static-file requests are quiet by default. Failed req
 
 Set `HANDWRITER_LOG_LEVEL` to `DEBUG` for full request logs and extra job details, or `WARNING` to silence training summaries. The default is `INFO`. This applies to both the web app and training CLI. TensorFlow native startup information is hidden; warnings and errors remain visible. An explicit `TF_CPP_MIN_LOG_LEVEL` value takes precedence.
 
+Training uses a tqdm sample progress bar in interactive terminals, with epoch and running NLL. Noninteractive output keeps bounded logging; environments without tqdm also retain that fallback. The training page receives live sample counts, motion-step counts, running NLL, best completed epoch NLL, elapsed time, estimated remaining time, processing rate, device/backend, source profile, learning rate and completed epoch history. Updates are throttled to twice per second, with epoch boundaries always reported; the page continues using its existing job polling.
+
 ## Checks
 
 ```powershell
@@ -85,6 +89,15 @@ python -m unittest discover -s tests -v
 node tests/test_capture.cjs
 node tests/test_jobs.cjs
 ```
+
+Compare the previous and optimized PyTorch training steps without saving profiles:
+
+```powershell
+python tests/benchmark_training.py --device cuda
+python tests/benchmark_training.py --device cpu
+```
+
+The benchmark uses synthetic 128- and 512-point samples, five warmup steps and the median of five full training steps (forward, backward, gradient clipping and Adam). It reports first-step time separately because TorchScript startup can affect short runs. Results depend on hardware and sample lengths.
 
 TensorFlow tests skip when TensorFlow is unavailable. Flask and rendering dependencies are needed for web tests. No packages are downloaded by the tests.
 

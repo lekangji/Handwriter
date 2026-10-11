@@ -48,7 +48,7 @@ def _forward_loss(offsets: Tensor, text: Tensor, weights: List[Tensor],
     kappa = offsets.new_zeros((1, attention_mix))
     window = offsets.new_zeros((1, text.size(1)))
     positions = torch.arange(text.size(0), dtype=offsets.dtype, device=offsets.device)[None, :]
-    total = offsets.new_zeros(())
+    hidden = torch.jit.annotate(List[Tensor], [])
     for t in range(targets.size(0)):
         x = inputs[t][None, :]
         h1, c1 = _lstm_step(torch.cat([window, x], dim=-1), h1, c1, k1, b1)
@@ -61,24 +61,28 @@ def _forward_loss(offsets: Tensor, text: Tensor, weights: List[Tensor],
         window = phi @ text
         h2, c2 = _lstm_step(torch.cat([x, h1, window], dim=-1), h2, c2, k2, b2)
         h3, c3 = _lstm_step(torch.cat([x, h2, window], dim=-1), h3, c3, k3, b3)
-        pis, sigmas, rhos, mus, es = torch.split(
-            h3 @ gw + gb, [output_mix, 2 * output_mix, output_mix, 2 * output_mix, 1], dim=-1
-        )
-        pis = F.log_softmax(pis, dim=-1)
-        sigmas = sigmas.clamp(math.log(1e-4), math.log(1e3)).exp()
-        rhos = rhos.tanh().clamp(-1 + 1e-6, 1 - 1e-6)
-        es = es.sigmoid().clamp(1e-6, 1 - 1e-6)
-        mu1, mu2 = mus[:, :output_mix], mus[:, output_mix:]
-        s1, s2 = sigmas[:, :output_mix], sigmas[:, output_mix:]
-        tx, ty, teos = targets[t, 0], targets[t, 1], targets[t, 2]
-        z1, z2 = (tx - mu1) / s1, (ty - mu2) / s2
-        zz = z1.square() + z2.square() - 2 * rhos * z1 * z2
-        norm = 2 * math.pi * s1 * s2 * (1 - rhos.square()).sqrt()
-        log_gauss = -zz / (2 * (1 - rhos.square())) - norm.log()
-        log_mix = torch.logsumexp(pis + log_gauss, dim=-1)
-        eos_term = teos * es[:, 0].log() + (1 - teos) * (1 - es[:, 0]).log()
-        total = total - (log_mix[0] + eos_term[0])
-    return total / targets.size(0)
+        hidden.append(h3)
+    # The output head does not feed recurrent state. Evaluate all timesteps in
+    # one matrix multiplication and density calculation, keeping the same
+    # teacher forcing, float32 clamps, mean loss, and per-sample Adam updates.
+    pis, sigmas, rhos, mus, es = torch.split(
+        torch.cat(hidden, dim=0) @ gw + gb,
+        [output_mix, 2 * output_mix, output_mix, 2 * output_mix, 1], dim=-1
+    )
+    pis = F.log_softmax(pis, dim=-1)
+    sigmas = sigmas.clamp(math.log(1e-4), math.log(1e3)).exp()
+    rhos = rhos.tanh().clamp(-1 + 1e-6, 1 - 1e-6)
+    es = es.sigmoid().clamp(1e-6, 1 - 1e-6)
+    mu1, mu2 = mus[:, :output_mix], mus[:, output_mix:]
+    s1, s2 = sigmas[:, :output_mix], sigmas[:, output_mix:]
+    tx, ty, teos = targets[:, 0:1], targets[:, 1:2], targets[:, 2]
+    z1, z2 = (tx - mu1) / s1, (ty - mu2) / s2
+    zz = z1.square() + z2.square() - 2 * rhos * z1 * z2
+    norm = 2 * math.pi * s1 * s2 * (1 - rhos.square()).sqrt()
+    log_gauss = -zz / (2 * (1 - rhos.square())) - norm.log()
+    log_mix = torch.logsumexp(pis + log_gauss, dim=-1)
+    eos_term = teos * es[:, 0].log() + (1 - teos) * (1 - es[:, 0]).log()
+    return -(log_mix + eos_term).mean()
 
 
 class TorchHandwritingModel(torch.nn.Module):
@@ -134,7 +138,7 @@ class TorchHandwritingModel(torch.nn.Module):
             json.dump(self.alphabet, stream)
 
 
-def fit(model, samples, epochs=10, lr=1e-5, log_every=1, progress_cb=None):
+def fit(model, samples, epochs=10, lr=1e-5, log_every=1, progress_cb=None, sample_progress_cb=None):
     if not samples:
         raise ValueError('No usable handwriting samples.')
     if epochs < 1 or log_every < 1 or not np.isfinite(lr) or lr <= 0:
@@ -153,28 +157,29 @@ def fit(model, samples, epochs=10, lr=1e-5, log_every=1, progress_cb=None):
     # Match TensorFlow Adam's epsilon and avoid version-specific optimizer defaults.
     optimizer = torch.optim.Adam(model.trainable_variables, lr=lr, eps=1e-7)
     history = []
-    training_log = TrainingLog(model, samples, epochs, lr, log_every)
+    training_log = TrainingLog(model, samples, epochs, lr, log_every, sample_progress_cb)
     started = training_log.started
-    for epoch in range(epochs):
-        epoch_loss = 0.0
-        for sample_index, (offsets, text) in enumerate(prepared, 1):
-            optimizer.zero_grad(set_to_none=True)
-            loss = model.forward_loss(offsets, text)
-            if not torch.isfinite(loss).item():
-                raise ValueError('Training loss is not finite; check handwriting samples and learning rate.')
-            loss.backward()
-            if any(weight.grad is None for weight in model.trainable_variables):
-                raise ValueError('Training graph disconnected from profile weights.')
-            torch.nn.utils.clip_grad_norm_(model.trainable_variables, 5.0, error_if_nonfinite=True)
-            optimizer.step()
-            epoch_loss += loss.detach().item()
-            training_log.sample(epoch, sample_index, epoch_loss)
-        epoch_loss /= len(samples)
-        history.append(epoch_loss)
-        elapsed = time.monotonic() - started
-        eta = elapsed / (epoch + 1) * (epochs - epoch - 1)
-        if progress_cb:
-            progress_cb(epoch, epochs, epoch_loss, elapsed, eta)
-        training_log.epoch(epoch, epoch_loss, elapsed, eta)
-    training_log.finish(history, time.monotonic() - started)
+    with training_log:
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            for sample_index, (offsets, text) in enumerate(prepared, 1):
+                optimizer.zero_grad(set_to_none=True)
+                loss = model.forward_loss(offsets, text)
+                if not torch.isfinite(loss).item():
+                    raise ValueError('Training loss is not finite; check handwriting samples and learning rate.')
+                loss.backward()
+                if any(weight.grad is None for weight in model.trainable_variables):
+                    raise ValueError('Training graph disconnected from profile weights.')
+                torch.nn.utils.clip_grad_norm_(model.trainable_variables, 5.0, error_if_nonfinite=True)
+                optimizer.step()
+                epoch_loss += loss.detach().item()
+                training_log.sample(epoch, sample_index, epoch_loss)
+            epoch_loss /= len(samples)
+            history.append(epoch_loss)
+            elapsed = time.monotonic() - started
+            eta = elapsed / (epoch + 1) * (epochs - epoch - 1)
+            if progress_cb:
+                progress_cb(epoch, epochs, epoch_loss, elapsed, eta)
+            training_log.epoch(epoch, epoch_loss, elapsed, eta)
+        training_log.finish(history, time.monotonic() - started)
     return history

@@ -377,19 +377,21 @@ def train_run():
             raise ValueError("No usable samples found. Capture at least one complete phrase.")
         if len(samples) * epochs > 800:
             raise ValueError("Web training allows up to 800 sample-epochs. Reduce epochs or use python -m ai.training.finetune_cli.")
-        alphabet = build_alphabet(request.form.get("extra_chars", ""), load_profile_alphabet(base_weights), samples)
+        base_alphabet = load_profile_alphabet(base_weights)
+        alphabet = build_alphabet(request.form.get("extra_chars", ""), base_alphabet, samples)
         def work(job_id, update):
             logger.info('Training job=%s profile=%s base=%s requested_device=%s '
                         'samples=%d epochs=%d lr=%g alphabet=%d',
                         job_id, profile_name, base_profile, device, len(samples), epochs, lr, len(alphabet))
             from ai.training.finetune import create_training_model, fit
             model = create_training_model(alphabet=alphabet, weights_path=base_weights, device=device)
-            update(device=model.device)
+            update(device=model.device, backend=getattr(model, 'backend', 'tensorflow'),
+                   device_name=getattr(model, 'device_name', model.device),
+                   base_profile=base_profile, learning_rate=lr, alphabet_size=len(alphabet))
             started = time.monotonic()
-            def progress(epoch, total, loss, elapsed, eta):
-                update(status="training", progress=round((epoch + 1) / total * 95), epoch=epoch + 1,
-                       epochs=total, loss=round(loss, 3), eta_s=round(eta, 1))
-            history = fit(model, samples, epochs=epochs, lr=lr, progress_cb=progress)
+            def progress(metrics):
+                update(status="training", **metrics)
+            history = fit(model, samples, epochs=epochs, lr=lr, sample_progress_cb=progress)
             output_path = os.path.join(PROFILES_DIR, f"{profile_name}.npz")
             logger.debug('Saving training profile job=%s path=%s', job_id, output_path)
             update(status="validating", progress=97)
@@ -399,7 +401,7 @@ def train_run():
             return {"profile_name": profile_name, "num_samples": len(samples), "epochs": epochs, "device": model.device,
                     "train_seconds": round(time.monotonic() - started, 1), "loss_start": round(history[0], 3),
                     "loss_end": round(history[-1], 3), "alphabet_size": len(alphabet),
-                    "new_chars": [c for c in alphabet if c not in ALPHABET], "profiles": list_profiles(),
+                    "new_chars": [c for c in alphabet if c not in base_alphabet], "profiles": list_profiles(),
                     "generation_checks_passed": validation['passed']}
         job_id = _start_job("training", work)
         return jsonify(job_id=job_id, progress_url=f"/jobs/{job_id}"), 202

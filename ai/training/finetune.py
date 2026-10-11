@@ -247,23 +247,25 @@ class TrainableHandwritingModel:
             json.dump(self.alphabet, f)
 
 
-def fit(model: TrainableHandwritingModel, samples, epochs=10, lr=1e-5, log_every=1, progress_cb=None):
+def fit(model: TrainableHandwritingModel, samples, epochs=10, lr=1e-5, log_every=1, progress_cb=None, sample_progress_cb=None):
     """samples: list of (offsets[T,3], text). Simple per-sample SGD (Adam),
     teacher-forced NLL — this is deliberately the minimal correct training
     loop, not a throughput-optimized one; a personal fine-tune is small data.
     progress_cb(epoch, epochs, epoch_loss, elapsed_s, eta_s), if given, is
     called after every epoch — used by the web UI and CLI to report
-    per-epoch timing and an ETA instead of going silent until it's done."""
+    per-epoch timing and an ETA instead of going silent until it's done.
+    sample_progress_cb(metrics), if given, receives throttled live metrics
+    and completed epoch history, independently of the epoch callback."""
     if getattr(model, 'backend', None) == 'torch':
         from ai.training.torch_finetune import fit as torch_fit
-        return torch_fit(model, samples, epochs, lr, log_every, progress_cb)
+        return torch_fit(model, samples, epochs, lr, log_every, progress_cb, sample_progress_cb)
     if tf is None:
         raise ImportError("TensorFlow is required for fine-tuning.")
     with tf.device(getattr(model, "device", "/CPU:0")):
-        return _fit(model, samples, epochs, lr, log_every, progress_cb)
+        return _fit(model, samples, epochs, lr, log_every, progress_cb, sample_progress_cb)
 
 
-def _fit(model, samples, epochs, lr, log_every, progress_cb):
+def _fit(model, samples, epochs, lr, log_every, progress_cb, sample_progress_cb=None):
     if not samples:
         raise ValueError("No usable handwriting samples.")
     if epochs < 1 or log_every < 1 or not np.isfinite(lr) or lr <= 0:
@@ -280,29 +282,30 @@ def _fit(model, samples, epochs, lr, log_every, progress_cb):
         prepared.append((tf.convert_to_tensor(offsets), tf.convert_to_tensor(model.encode_text(text))))
     opt = tf.keras.optimizers.Adam(learning_rate=lr)
     history = []
-    training_log = TrainingLog(model, samples, epochs, lr, log_every)
+    training_log = TrainingLog(model, samples, epochs, lr, log_every, sample_progress_cb)
     t_start = training_log.started
-    for epoch in range(epochs):
-        epoch_loss = 0.0
-        for sample_index, (offsets, onehot) in enumerate(prepared, 1):
-            with tf.GradientTape() as tape:
-                loss = model.forward_loss(offsets, onehot)
-            grads = tape.gradient(loss, model.trainable_variables)
-            tf.debugging.assert_all_finite(loss, "Training loss is not finite; check handwriting samples and learning rate.")
-            if any(g is None for g in grads):
-                raise ValueError("Training graph disconnected from profile weights.")
-            for grad in grads:
-                tf.debugging.assert_all_finite(grad, "Training gradient is not finite; profile was not updated.")
-            grads, _ = tf.clip_by_global_norm(grads, 5.0)
-            opt.apply_gradients(zip(grads, model.trainable_variables))
-            epoch_loss += float(loss)
-            training_log.sample(epoch, sample_index, epoch_loss)
-        epoch_loss /= max(len(samples), 1)
-        history.append(epoch_loss)
-        elapsed = time.monotonic() - t_start
-        eta = (elapsed / (epoch + 1)) * (epochs - epoch - 1)
-        if progress_cb:
-            progress_cb(epoch, epochs, epoch_loss, elapsed, eta)
-        training_log.epoch(epoch, epoch_loss, elapsed, eta)
-    training_log.finish(history, time.monotonic() - t_start)
+    with training_log:
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            for sample_index, (offsets, onehot) in enumerate(prepared, 1):
+                with tf.GradientTape() as tape:
+                    loss = model.forward_loss(offsets, onehot)
+                grads = tape.gradient(loss, model.trainable_variables)
+                tf.debugging.assert_all_finite(loss, "Training loss is not finite; check handwriting samples and learning rate.")
+                if any(g is None for g in grads):
+                    raise ValueError("Training graph disconnected from profile weights.")
+                for grad in grads:
+                    tf.debugging.assert_all_finite(grad, "Training gradient is not finite; profile was not updated.")
+                grads, _ = tf.clip_by_global_norm(grads, 5.0)
+                opt.apply_gradients(zip(grads, model.trainable_variables))
+                epoch_loss += float(loss)
+                training_log.sample(epoch, sample_index, epoch_loss)
+            epoch_loss /= max(len(samples), 1)
+            history.append(epoch_loss)
+            elapsed = time.monotonic() - t_start
+            eta = (elapsed / (epoch + 1)) * (epochs - epoch - 1)
+            if progress_cb:
+                progress_cb(epoch, epochs, epoch_loss, elapsed, eta)
+            training_log.epoch(epoch, epoch_loss, elapsed, eta)
+        training_log.finish(history, time.monotonic() - t_start)
     return history

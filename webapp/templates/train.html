@@ -71,6 +71,18 @@
     <div id="progressBox" style="display:none">
       <p id="progressText" role="status" aria-live="polite">Starting…</p>
       <progress id="progressBar" aria-label="Training progress" max="100" value="0"></progress>
+      <table class="kv" id="liveMetrics" style="display:none">
+        <tr><td>Epoch</td><td id="liveEpoch"></td></tr>
+        <tr><td>Samples this epoch</td><td id="liveSample"></td></tr>
+        <tr><td>Running average NLL</td><td id="liveLoss"></td></tr>
+        <tr><td>Best completed epoch NLL</td><td id="liveBestLoss"></td></tr>
+        <tr><td>Training elapsed / estimated remaining</td><td id="liveTime"></td></tr>
+        <tr><td>Motion steps processed</td><td id="liveSteps"></td></tr>
+        <tr><td>Processing rate</td><td id="liveRate"></td></tr>
+        <tr><td>Device / backend</td><td id="liveDevice"></td></tr>
+        <tr><td>Starting profile / learning rate</td><td id="liveBase"></td></tr>
+        <tr><td>Completed epoch NLL</td><td id="liveHistory"></td></tr>
+      </table>
     </div>
     <div id="resultEmpty" class="empty-state">Training log and the resulting profile will appear here.</div>
     <div id="resultCard" class="result-card" style="display:none">
@@ -141,20 +153,42 @@ function showLog(log) {
   document.getElementById('rNewChars').textContent = log.new_chars.join(' ');
   document.getElementById('resultCard').style.display = 'block';
 }
+function metric(value, digits = 1) {
+  return value == null || !Number.isFinite(Number(value)) ? '—' : Number(value).toFixed(digits);
+}
+function renderTrainingProgress(job) {
+  progressBar.value = job.progress || 0;
+  if (job.status === 'training') {
+    document.getElementById('liveMetrics').style.display = '';
+    progressText.textContent = `Epoch ${job.epoch}/${job.epochs} · sample ${job.sample}/${job.samples}`;
+    const values = {
+      liveEpoch: `${job.epoch}/${job.epochs}`,
+      liveSample: `${job.sample}/${job.samples}`,
+      liveLoss: metric(job.loss, 4),
+      liveBestLoss: metric(job.best_loss, 4),
+      liveTime: `${metric(job.training_elapsed_s)}s / ${job.eta_s == null ? 'Estimating…' : metric(job.eta_s) + 's'}`,
+      liveSteps: `${job.processed_steps}/${job.total_steps}`,
+      liveRate: `${metric(job.steps_per_s)} steps/s`,
+      liveDevice: `${job.device_name || job.device || 'auto'} · ${job.device || 'auto'} · ${job.backend || '—'}`,
+      liveBase: `${job.base_profile || '—'} · ${job.learning_rate == null ? '—' : job.learning_rate}`,
+      liveHistory: (job.loss_history || []).map((loss, i) => `${i + 1}: ${metric(loss, 4)}`).join(' · ') || 'No completed epochs yet',
+    };
+    for (const [id, value] of Object.entries(values)) document.getElementById(id).textContent = value;
+  } else {
+    progressText.textContent = job.status === 'validating'
+      ? 'Checking generated handwriting before saving…'
+      : 'Preparing your handwriting profile…';
+  }
+}
 async function resumeTraining(id) {
   submitBtn.disabled = true;
   resultError.style.display = 'none';
   document.getElementById('resultCard').style.display = 'none';
   document.getElementById('resultEmpty').style.display = 'none';
   progressBox.style.display = 'block';
+  document.getElementById('liveMetrics').style.display = 'none';
   try {
-    const log = await HandwriterJobs.wait(id, job => {
-      progressBar.value = job.progress;
-      progressText.textContent = job.status === 'training'
-        ? `Epoch ${job.epoch}/${job.epochs} · ${job.device || 'auto'} · loss ${job.loss} · about ${job.eta_s}s remaining`
-        : job.status === 'validating' ? 'Checking generated handwriting before saving…'
-        : 'Preparing your handwriting profile…';
-    });
+    const log = await HandwriterJobs.wait(id, renderTrainingProgress);
     showLog(log);
     sessionStorage.removeItem('trainingJob');
   } catch (error) {

@@ -139,6 +139,31 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202, response.json)
         self.assertTrue(set('Z&→').issubset(model.call_args.kwargs['alphabet']))
 
+    def test_training_reports_only_characters_added_to_selected_base(self):
+        from ai.inference.hw_model import ALPHABET
+        for inherited, text, expected in [('Z&', 'Z&', []), ('Z&', 'Z&→', ['→'])]:
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as directory:
+                with open(os.path.join(directory, 'personal.npz'), 'wb') as stream:
+                    stream.write(b'weights mocked below')
+                with open(os.path.join(directory, 'personal.alphabet.json'), 'w') as stream:
+                    json.dump(ALPHABET + list(inherited), stream)
+                data = json.dumps({'calibration_px_per_model_unit': 2, 'samples': [
+                    {'text': text, 'strokes': [[[0, 0], [4, 2]]]},
+                ]}).encode()
+                result = {}
+                def start(kind, work):
+                    result.update(work('test', lambda **values: None))
+                    return 'test'
+                with patch('app.PROFILES_DIR', directory), patch('app._start_job', side_effect=start), patch('ai.training.finetune.create_training_model') as model, patch('ai.training.finetune.fit', return_value=[1.0]), patch('app.save_validated_profile', return_value={'passed': 4, 'failed': []}):
+                    model.return_value.device = '/CPU:0'
+                    response = self.client.post('/train/run', data={
+                        'profile_name': 'continued', 'base_profile': 'personal', 'epochs': '1',
+                        'samples_json': (io.BytesIO(data), 'samples.json'),
+                    })
+                self.assertEqual(response.status_code, 202, response.json)
+                self.assertEqual(result['new_chars'], expected)
+                self.assertEqual(model.call_args.kwargs['weights_path'], os.path.join(directory, 'personal.npz'))
+
     def test_training_rejects_invalid_device_before_starting_job(self):
         data = json.dumps({'calibration_px_per_model_unit': 2, 'samples': [
             {'text': 'hi', 'strokes': [[[0, 0], [4, 2]]]},
@@ -168,6 +193,6 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202, response.json)
         self.assertEqual(model.call_args.kwargs['device'], 'cuda:1')
         self.assertEqual(result['device'], '/GPU:1')
-        self.assertIn({'device': '/GPU:1'}, updates)
+        self.assertEqual(updates[0]['device'], '/GPU:1')
 
 if __name__=='__main__':unittest.main()

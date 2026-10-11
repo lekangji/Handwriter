@@ -68,6 +68,30 @@ class LoggingTests(unittest.TestCase):
         self.assertIn('sample=2/3', message)
         self.assertIn('avg_nll=3.0000', message)
 
+    def test_live_training_progress_tracks_samples_steps_and_epoch_history(self):
+        model = SimpleNamespace(device='cpu', alphabet=['a'])
+        samples = [([[0, 0, 0]] * 4, 'a'), ([[0, 0, 0]] * 3, 'a')]
+        events = []
+        with patch('ai.training.training_log.time.monotonic', return_value=100):
+            reporter = TrainingLog(model, samples, 2, 1e-5, 1, sample_progress_cb=events.append)
+        reporter.sample(0, 1, 4.0, now=102)
+        reporter.sample(0, 2, 6.0, now=104)
+        reporter.epoch(0, 3.0, 4.0, 4.0)
+        reporter.sample(1, 1, 2.0, now=106)
+        self.assertEqual(events[0]['sample'], 0)
+        completed = events[2]
+        self.assertEqual(completed['sample'], 2)
+        self.assertEqual(completed['samples'], 2)
+        self.assertEqual(completed['processed_steps'], 5)
+        self.assertEqual(completed['total_steps'], 10)
+        self.assertEqual(completed['loss'], 3.0)
+        self.assertEqual(completed['progress'], 47.5)
+        self.assertEqual(completed['eta_s'], 4.0)
+        self.assertEqual(completed['steps_per_s'], 1.25)
+        self.assertEqual(events[-1]['processed_steps'], 8)
+        self.assertEqual(events[-1]['loss_history'], [3.0])
+        reporter.close()
+
 
 if __name__ == '__main__':
     unittest.main()
